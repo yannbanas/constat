@@ -12,7 +12,10 @@ constat-model = { workspace = true }
 constat-collect = { workspace = true }
 constat-store = { workspace = true }
 clap = { workspace = true }
-miette = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+hex = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

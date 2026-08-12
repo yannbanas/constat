@@ -1,0 +1,825 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "bin",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19345,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/usr/sbin/nologin",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:bin",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            2,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "daemon",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19345,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/usr/sbin/nologin",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:daemon",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "adm",
+                ),
+                Text(
+                    "jdupont",
+                ),
+                Text(
+                    "sudo",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Text(
+            "yescrypt",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            20493,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            365,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/bin/bash",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            1000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "mmartin",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Text(
+            "sha512",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            20120,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/bin/zsh",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            1001,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "root",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19345,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/bin/bash",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19345,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/usr/sbin/nologin",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:sshd",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            105,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "backup",
+                ),
+                Text(
+                    "svc-sauvegarde",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Text(
+            "sha512",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19800,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/usr/sbin/nologin",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            998,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.groups",
+        ),
+        value: List(
+            [
+                Text(
+                    "www-data",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.password.algorithm",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.password.last_change_days",
+        ),
+        value: Int(
+            19345,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.password.locked",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.password.max_days",
+        ),
+        value: Int(
+            99999,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.password.set",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.shell",
+        ),
+        value: Text(
+            "/usr/sbin/nologin",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:www-data",
+        ),
+        attribute: Attribute(
+            "user.uid",
+        ),
+        value: Int(
+            33,
+        ),
+    },
+]

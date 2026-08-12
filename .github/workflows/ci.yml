@@ -1,0 +1,91 @@
+# Intégration continue de Constat.
+#
+# Deux exigences non négociables (CONSTAT-ARCHITECTURE.md) :
+#   - §15 : le job hash-stability recompile constat-model sur x86-64 ET ARM et
+#     vérifie que les mêmes données produisent les mêmes empreintes. Une
+#     divergence entre architectures invaliderait tout l'historique de preuve.
+#   - §17 : cargo-deny sur les licences et les vulnérabilités connues.
+#
+# Note : clippy tourne sans -D warnings pour l'instant (phase de démarrage,
+# 7 chantiers en parallèle). À durcir dès que le workspace est stabilisé.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: Formatage (rustfmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Pas de -D warnings pour l'instant : les avertissements sont visibles
+      # dans les journaux mais ne cassent pas la CI. À durcir ensuite.
+      - run: cargo clippy --workspace --all-targets
+
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  deny:
+    name: Chaîne d'approvisionnement (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # §15 — test d'intégration continue non négociable : le même corpus doit
+  # produire les mêmes empreintes sur x86-64 et sur ARM. Les tests de
+  # constat-model (sérialisation canonique, stabilité des empreintes) tournent
+  # sur les deux architectures ; toute divergence casse la CI.
+  hash-stability:
+    name: Stabilité des empreintes (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p constat-model

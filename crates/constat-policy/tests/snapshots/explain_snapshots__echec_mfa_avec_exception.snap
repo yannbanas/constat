@@ -1,0 +1,21 @@
+---
+source: crates/constat-policy/tests/explain_snapshots.rs
+expression: explain(&ev)
+---
+ADM-MFA — tous les comptes privilégiés ont l'authentification forte
+Machine : srv-ad-01
+NON CONFORME sur la période du 01/01/2026 au 31/03/2026.
+  Couverture : 99,2 % — écart maximal entre deux collectes : 26 h
+  3 interruptions déclarées :
+    - 12/02/2026 03h00 → 12/02/2026 07h12  (machine arrêtée)
+    - 28/02/2026 14h00 → 28/02/2026 14h45  (agent indisponible)
+    - 03/03/2026 01h00 → 03/03/2026 09h30  (agent indisponible)
+  1 violation :
+    - srv-ad-01 · user:jdupont
+      observé : absent — attendu : vrai
+      pourquoi : « user.mfa_enabled » n'a jamais été observé sur cette entité — l'absence n'est pas la conformité (§3.2), vrai était attendu
+      constaté du 15/01/2026 00h00 au 31/03/2026 00h00
+      preuve : blob 02020202…
+  1 exception appliquée :
+    - user:svc-sauvegarde — compte de service, authentification par certificat
+      approuvée par RSSI, expire le 01/01/2027 — neutralise : « user.mfa_enabled » n'a jamais été observé sur cette entité — l'absence n'est pas la conformité (§3.2), vrai était attendu

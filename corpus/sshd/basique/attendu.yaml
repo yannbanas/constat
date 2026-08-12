@@ -1,0 +1,83 @@
+# Faits attendus pour corpus/sshd/basique/capture.txt
+#
+# Chaque fait : entité, attribut, valeur attendue.
+# `value.absent: true` signifie Value::Absent — la directive ne figure pas
+# dans le fichier (le défaut du système s'applique) ; ce n'est PAS "no".
+# Une directive présente uniquement en commentaire (#X11Forwarding no) est
+# absente : un commentaire n'est pas une directive.
+
+collector: sshd
+case: basique
+
+facts:
+  - entity: "service:sshd"
+    attribute: "sshd.Port"
+    value: { int: 22 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PermitRootLogin"
+    value: { text: "no" }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PasswordAuthentication"
+    value: { bool: false }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PermitEmptyPasswords"
+    value: { bool: false }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PubkeyAuthentication"
+    value: { bool: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.KbdInteractiveAuthentication"
+    value: { bool: false }
+
+  - entity: "service:sshd"
+    attribute: "sshd.MaxAuthTries"
+    value: { int: 3 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.MaxSessions"
+    value: { int: 4 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.LoginGraceTime"
+    value: { int: 30 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.StrictModes"
+    value: { bool: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.UsePAM"
+    value: { bool: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.AllowTcpForwarding"
+    value: { bool: false }
+
+  - entity: "service:sshd"
+    attribute: "sshd.LogLevel"
+    value: { text: "VERBOSE" }
+
+  - entity: "service:sshd"
+    attribute: "sshd.ClientAliveInterval"
+    value: { int: 300 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.ClientAliveCountMax"
+    value: { int: 2 }
+
+  - entity: "service:sshd"
+    attribute: "sshd.AllowGroups"
+    value: { list: [{ text: "ssh-users" }] }
+
+  # Le cas qui compte : X11Forwarding n'apparaît qu'en commentaire dans le
+  # fichier. L'attribut est donc ABSENT — le défaut du système s'applique,
+  # qui varie selon les versions. L'extracteur ne doit ni produire "no",
+  # ni omettre le fait : l'absence est un fait, et souvent LE fait important.
+  - entity: "service:sshd"
+    attribute: "sshd.X11Forwarding"
+    value: { absent: true }

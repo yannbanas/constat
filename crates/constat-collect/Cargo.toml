@@ -11,6 +11,8 @@ rust-version.workspace = true
 constat-model = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Empreintes de secrets (Value::Fingerprint) : version pilotée par le workspace.
+blake3 = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

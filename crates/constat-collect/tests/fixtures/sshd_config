@@ -1,0 +1,23 @@
+# Configuration sshd — capture d'exemple anonymisée (srv-fic-01)
+Include /etc/ssh/sshd_config.d/*.conf
+
+Port 22
+Port 2222
+ListenAddress 0.0.0.0
+
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM yes
+X11Forwarding no
+MaxAuthTries 4
+
+# PermitEmptyPasswords volontairement absent : le fait doit etre Absent
+
+Match User svc-sauvegarde
+    PasswordAuthentication yes
+    PermitRootLogin yes

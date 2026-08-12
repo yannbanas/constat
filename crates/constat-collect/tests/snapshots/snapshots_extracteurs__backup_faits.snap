@@ -1,0 +1,99 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "backup:base-de-donnees",
+        ),
+        attribute: Attribute(
+            "backup.last_restore_test",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "backup:base-de-donnees",
+        ),
+        attribute: Attribute(
+            "backup.last_success",
+        ),
+        value: Int(
+            1786417200000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "backup:base-de-donnees",
+        ),
+        attribute: Attribute(
+            "backup.retention_days",
+        ),
+        value: Int(
+            35,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "backup:postes-nomades",
+        ),
+        attribute: Attribute(
+            "backup.last_restore_test",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "backup:postes-nomades",
+        ),
+        attribute: Attribute(
+            "backup.last_success",
+        ),
+        value: Int(
+            1783030200000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "backup:postes-nomades",
+        ),
+        attribute: Attribute(
+            "backup.retention_days",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "backup:srv-fichiers",
+        ),
+        attribute: Attribute(
+            "backup.last_restore_test",
+        ),
+        value: Int(
+            1782810000000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "backup:srv-fichiers",
+        ),
+        attribute: Attribute(
+            "backup.last_success",
+        ),
+        value: Int(
+            1786414440000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "backup:srv-fichiers",
+        ),
+        attribute: Attribute(
+            "backup.retention_days",
+        ),
+        value: Int(
+            90,
+        ),
+    },
+]

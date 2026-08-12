@@ -18,9 +18,10 @@ constat-policy = { workspace = true }
 constat-diff = { workspace = true }
 constat-store = { workspace = true }
 constat-report = { workspace = true }
+constat-anchor = { workspace = true }
 clap = { workspace = true }
-miette = { workspace = true }
-serde_yaml = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

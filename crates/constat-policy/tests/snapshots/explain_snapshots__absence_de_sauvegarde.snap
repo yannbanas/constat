@@ -1,0 +1,18 @@
+---
+source: crates/constat-policy/tests/explain_snapshots.rs
+expression: explain(&ev)
+---
+BKP-24H — sauvegarde réussie dans les dernières 24 heures
+Machine : srv-fic-02
+NON CONFORME sur la période du 01/01/2026 au 31/03/2026.
+  Couverture : 99,2 % — écart maximal entre deux collectes : 26 h
+  3 interruptions déclarées :
+    - 12/02/2026 03h00 → 12/02/2026 07h12  (machine arrêtée)
+    - 28/02/2026 14h00 → 28/02/2026 14h45  (agent indisponible)
+    - 03/03/2026 01h00 → 03/03/2026 09h30  (agent indisponible)
+  1 violation :
+    - srv-fic-02 · *
+      observé : absent — attendu : « une valeur de « backup.last_success » datant de moins de 24 h »
+      pourquoi : aucune valeur de « backup.last_success » observée sur la période — impossible d'attester une fraîcheur de moins de 24 h
+      constaté du 01/01/2026 00h00 au 31/03/2026 00h00
+      preuve : aucune — le constat porte sur une absence

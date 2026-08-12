@@ -1,0 +1,24 @@
+# Dependabot : mises à jour surveillées des dépendances Cargo et des actions CI.
+#
+# Rappel (§17 + CONTRIBUTING.md) : une mise à jour de dépendance reste une PR
+# comme une autre — elle passe la CI complète (tests, cargo-deny, stabilité
+# des empreintes) et se relit. Rien n'est fusionné automatiquement.
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      cargo-mineures:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5

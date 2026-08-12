@@ -11,6 +11,11 @@
 
 use constat_model::{CollectorId, Fact};
 
+pub mod backup;
+pub mod capture;
+pub mod linux;
+pub mod redact;
+
 /// Capture brute, telle que lue sur la machine. Peut contenir des secrets :
 /// ne doit JAMAIS être émise telle quelle.
 #[derive(Debug, Clone)]
@@ -36,4 +41,53 @@ pub trait Collector {
     fn collect(&self) -> Result<RawCapture, CollectError>;
     fn redact(&self, raw: RawCapture) -> RedactedCapture;
     fn extract(&self, redacted: &RedactedCapture) -> Result<Vec<Fact>, CollectError>;
+}
+
+/// Le registre des collecteurs : **compilés dans le binaire, jamais
+/// téléchargés** (§7.1). L'ordre suit la valeur (§7.3) : comptes privilégiés
+/// et preuve de sauvegarde d'abord — le coin d'entrée du produit.
+///
+/// Sur une plateforme non-Unix, chaque `collect()` retourne proprement
+/// [`CollectError::Unavailable`] ; l'expurgation et l'extraction, elles,
+/// restent pures et fonctionnent partout.
+pub fn all_collectors() -> Vec<Box<dyn Collector>> {
+    vec![
+        Box::new(linux::accounts::AccountsCollector::default()),
+        Box::new(backup::BackupProofCollector::default()),
+        Box::new(linux::sshd::SshdCollector::default()),
+        Box::new(linux::sudoers::SudoersCollector::default()),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn le_registre_est_complet_et_ordonne_par_valeur() {
+        let ids: Vec<String> = all_collectors().iter().map(|c| c.id().0).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "linux.accounts",
+                "backup.proof",
+                "linux.sshd",
+                "linux.sudoers"
+            ]
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn sur_non_unix_collect_retourne_unavailable() {
+        for collector in all_collectors() {
+            match collector.collect() {
+                Err(CollectError::Unavailable(_)) => {}
+                autre => panic!(
+                    "{} : attendu Unavailable sur non-unix, obtenu {autre:?}",
+                    collector.id().0
+                ),
+            }
+        }
+    }
 }

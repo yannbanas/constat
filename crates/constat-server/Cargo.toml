@@ -11,7 +11,9 @@ rust-version.workspace = true
 constat-model = { workspace = true }
 constat-store = { workspace = true }
 clap = { workspace = true }
-miette = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

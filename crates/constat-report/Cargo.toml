@@ -8,9 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Volontairement découplé : le dossier de preuve ne dépend que des types
+# stables de constat-model. Les résumés (verdicts, couverture, exceptions)
+# sont des structures propres au dossier, remplies par l'appelant à partir
+# de constat-policy / constat-time — le rendu n'a pas à connaître ces crates.
 constat-model = { workspace = true }
-constat-time = { workspace = true }
-constat-policy = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

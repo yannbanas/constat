@@ -1,0 +1,17 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: redacted
+---
+# /etc/sudoers — capture d'exemple anonymisée
+Defaults env_reset
+Defaults mail_badpass
+Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+User_Alias OPERATEURS = jdupont, mmartin
+
+root ALL=(ALL:ALL) ALL
+%sudo ALL=(ALL:ALL) ALL
+OPERATEURS ALL=(root) /usr/bin/systemctl restart nginx, /usr/bin/journalctl
+svc-sauvegarde ALL=(root) NOPASSWD: /usr/local/bin/lancer-sauvegarde
+
+@includedir /etc/sudoers.d

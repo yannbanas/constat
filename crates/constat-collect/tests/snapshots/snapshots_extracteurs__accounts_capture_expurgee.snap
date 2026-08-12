@@ -1,0 +1,33 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: redacted
+---
+### constat:fichier /etc/passwd
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+sshd:x:105:65534::/run/sshd:/usr/sbin/nologin
+jdupont:x:1000:1000:Jean Dupont:/home/jdupont:/bin/bash
+mmartin:x:1001:1001:Marie Martin:/home/mmartin:/bin/zsh
+svc-sauvegarde:x:998:998:compte de service sauvegarde:/var/lib/backup:/usr/sbin/nologin
+### constat:fichier /etc/group
+root:x:0:
+daemon:x:1:
+bin:x:2:
+adm:x:4:jdupont
+sudo:x:27:jdupont
+www-data:x:33:
+backup:x:34:svc-sauvegarde
+jdupont:x:1000:
+mmartin:x:1001:
+svc-sauvegarde:x:998:
+### constat:fichier /etc/shadow
+root:*:19345:0:99999:7:::
+daemon:*:19345:0:99999:7:::
+bin:*:19345:0:99999:7:::
+www-data:*:19345:0:99999:7:::
+sshd:*:19345:0:99999:7:::
+jdupont:$y$[EXPURGÉ:hachage]:20493:0:365:14:::
+mmartin:$6$[EXPURGÉ:hachage]:20120:0:99999:7:::
+svc-sauvegarde:!$6$[EXPURGÉ:hachage]:19800:0:99999:7:::

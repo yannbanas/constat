@@ -1,0 +1,191 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "group:sudo",
+        ),
+        attribute: Attribute(
+            "sudo.all_commands",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "group:sudo",
+        ),
+        attribute: Attribute(
+            "sudo.nopasswd",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "group:sudo",
+        ),
+        attribute: Attribute(
+            "sudo.rules",
+        ),
+        value: List(
+            [
+                Text(
+                    "ALL = (ALL:ALL) ALL",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "sudo.all_commands",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "sudo.nopasswd",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:jdupont",
+        ),
+        attribute: Attribute(
+            "sudo.rules",
+        ),
+        value: List(
+            [
+                Text(
+                    "ALL = (root) /usr/bin/systemctl restart nginx, /usr/bin/journalctl",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "sudo.all_commands",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "sudo.nopasswd",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:mmartin",
+        ),
+        attribute: Attribute(
+            "sudo.rules",
+        ),
+        value: List(
+            [
+                Text(
+                    "ALL = (root) /usr/bin/systemctl restart nginx, /usr/bin/journalctl",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "sudo.all_commands",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "sudo.nopasswd",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:root",
+        ),
+        attribute: Attribute(
+            "sudo.rules",
+        ),
+        value: List(
+            [
+                Text(
+                    "ALL = (ALL:ALL) ALL",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "sudo.all_commands",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "sudo.nopasswd",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:svc-sauvegarde",
+        ),
+        attribute: Attribute(
+            "sudo.rules",
+        ),
+        value: List(
+            [
+                Text(
+                    "ALL = (root) NOPASSWD: /usr/local/bin/lancer-sauvegarde",
+                ),
+            ],
+        ),
+    },
+]

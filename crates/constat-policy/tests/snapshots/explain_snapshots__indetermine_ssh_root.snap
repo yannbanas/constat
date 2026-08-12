@@ -1,0 +1,10 @@
+---
+source: crates/constat-policy/tests/explain_snapshots.rs
+expression: explain(&ev)
+---
+SSH-ROOT — la connexion root en SSH est désactivée
+Machine : srv-app-01
+INDÉTERMINÉ sur la période du 01/01/2026 au 31/03/2026 — couverture insuffisante pour se prononcer.
+  Couverture : 61 % — écart maximal entre deux collectes : 21 j
+  1 interruption déclarée :
+    - 05/01/2026 00h00 → 26/01/2026 00h00  (raison inconnue)

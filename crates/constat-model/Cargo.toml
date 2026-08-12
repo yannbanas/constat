@@ -7,12 +7,18 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Expose le module `testing` (générateurs proptest réutilisables par les autres
+# crates du workspace pour leurs propres tests par propriétés).
+testing = ["dep:proptest"]
+
 [dependencies]
 serde = { workspace = true }
 ciborium = { workspace = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
+proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

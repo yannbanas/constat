@@ -1,0 +1,91 @@
+# deny.toml — politique de chaîne d'approvisionnement de Constat
+#
+# Voir CONSTAT-ARCHITECTURE.md §17 : cargo-deny tourne en intégration continue,
+# sur les licences ET sur les vulnérabilités connues. Peu de dépendances, et
+# aucune ajoutée sans justification écrite (voir CONTRIBUTING.md).
+#
+# Vérification locale : cargo deny check
+
+[graph]
+# Toutes les cibles supportées par le projet : Linux et Windows (agents),
+# x86-64 et ARM (test de stabilité d'empreinte multi-architecture, §15).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+all-features = true
+
+# ---------------------------------------------------------------------------
+# Vulnérabilités connues (RustSec)
+# ---------------------------------------------------------------------------
+[advisories]
+version = 2
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# version 2 : toute vulnérabilité, crate non maintenu ou yanked = erreur.
+yanked = "deny"
+# Aucune exemption. Toute exemption future doit être justifiée par écrit
+# (identifiant RustSec + raison + date de réexamen) dans la PR qui l'ajoute.
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+# Liste blanche stricte. Tout ce qui n'y figure pas est refusé — en particulier
+# le copyleft fort (GPL, AGPL, LGPL, MPL, SSPL, BUSL…), incompatible avec la
+# distribution d'un binaire unique sous Apache-2.0.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+]
+# Seuil de confiance sur la détection de licence par clearlydefined.
+confidence-threshold = 0.93
+
+[licenses.private]
+# Les crates du workspace ne sont pas publiés pour l'instant.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Interdictions et doublons
+# ---------------------------------------------------------------------------
+[bans]
+# Plusieurs versions d'une même crate : toléré en avertissement au début
+# (l'écosystème rend le zéro-doublon coûteux), à durcir ensuite.
+multiple-versions = "warn"
+wildcards = "deny"          # aucune dépendance en version "*"
+highlight = "all"
+
+# Crates explicitement interdits, quelle que soit la version.
+deny = [
+    # OpenSSL : le projet impose rustls, aucune dépendance C pour le TLS (§9).
+    { crate = "openssl", reason = "rustls uniquement — pas d'OpenSSL (§9)" },
+    { crate = "openssl-sys", reason = "rustls uniquement — pas d'OpenSSL (§9)" },
+    { crate = "native-tls", reason = "rustls uniquement — pas d'OpenSSL (§9)" },
+]
+
+[bans.workspace-dependencies]
+# Les versions se déclarent dans [workspace.dependencies], pas crate par crate.
+duplicates = "deny"
+unused = "warn"
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+# crates.io uniquement. Aucun dépôt git, aucun registre alternatif :
+# chaque dépendance doit être publiée, versionnée et auditable.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

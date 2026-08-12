@@ -1,0 +1,92 @@
+---
+source: crates/constat-policy/tests/parse_spec.rs
+expression: assertions
+---
+[
+    Assertion {
+        id: AssertionId(
+            "SSH-ROOT",
+        ),
+        title: "la connexion root en SSH est désactivée",
+        scope: AssetSelector {
+            os: Some(
+                "linux",
+            ),
+            tag: None,
+            domain: None,
+        },
+        predicate: Never {
+            entity: Glob(
+                "service:sshd",
+            ),
+            attr: Attribute(
+                "sshd.PermitRootLogin",
+            ),
+            equals: Text(
+                "yes",
+            ),
+        },
+        exceptions: [],
+    },
+    Assertion {
+        id: AssertionId(
+            "ADM-MFA",
+        ),
+        title: "tous les comptes privilégiés ont l'authentification forte",
+        scope: AssetSelector {
+            os: None,
+            tag: None,
+            domain: Some(
+                "*",
+            ),
+        },
+        predicate: ForAll {
+            over: Typed {
+                entity_type: "user",
+                filter: {
+                    "privileged": Bool(
+                        true,
+                    ),
+                },
+            },
+            satisfies: Always {
+                entity: None,
+                attr: Attribute(
+                    "user.mfa_enabled",
+                ),
+                equals: Bool(
+                    true,
+                ),
+            },
+        },
+        exceptions: [
+            Exception {
+                entity: "user:svc-sauvegarde",
+                reason: "compte de service, authentification par certificat",
+                approved_by: "RSSI",
+                expires: "2027-01-01",
+            },
+        ],
+    },
+    Assertion {
+        id: AssertionId(
+            "BKP-24H",
+        ),
+        title: "sauvegarde réussie dans les dernières 24 heures",
+        scope: AssetSelector {
+            os: None,
+            tag: Some(
+                "production",
+            ),
+            domain: None,
+        },
+        predicate: Fresher {
+            entity: None,
+            attr: Attribute(
+                "backup.last_success",
+            ),
+            than: "24h",
+        },
+        exceptions: [],
+    },
+]

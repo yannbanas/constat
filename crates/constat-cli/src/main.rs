@@ -1,6 +1,222 @@
-//! CLI Constat (§10) : state, diff, history, timeline, check, pack, anchor.
+//! Binaire `constat` — l'interface en ligne de commande du §10.
+//!
+//! ```text
+//! constat state    --asset srv-fic-01 --at 2026-03-03T14:00
+//! constat diff     --asset srv-fic-01 --from 2026-03-01 --to 2026-03-31
+//! constat history  --entity "user:jdupont" --attr "user.privileged"
+//! constat timeline --assertion SSH-ROOT --period 2026-Q1
+//! constat check    --period 2026-Q1 --explain
+//! constat pack     --period 2026-Q1 --out dossier-Q1.pdf
+//! constat anchor
+//! ```
 
-fn main() {
-    // Développé par l'agent responsable des binaires.
-    eprintln!("constat : en construction");
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use constat_cli::{commands, storeopen};
+
+#[derive(Parser)]
+#[command(
+    name = "constat",
+    version,
+    about = "Constat — l'état de votre infrastructure dans la durée, avec preuve.",
+    long_about = "Constat enregistre l'état de configuration d'une infrastructure dans la \
+                  durée, de façon non falsifiable, et produit la preuve qu'un auditeur \
+                  accepte. Cette CLI interroge le magasin local : elle ne modifie rien, jamais."
+)]
+struct Cli {
+    /// Chemin du magasin (sinon variable CONSTAT_STORE, sinon ./constat.redb)
+    #[arg(long, global = true, value_name = "CHEMIN")]
+    store: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// État d'une machine à une date : dernier snapshot antérieur + faits
+    State {
+        /// Machine interrogée, ex. srv-fic-01
+        #[arg(long)]
+        asset: String,
+        /// Date, ex. 2026-03-03 ou 2026-03-03T14:00
+        #[arg(long)]
+        at: String,
+    },
+    /// Différence d'état d'une machine entre deux dates
+    Diff {
+        /// Machine interrogée
+        #[arg(long)]
+        asset: String,
+        /// Date de départ
+        #[arg(long)]
+        from: String,
+        /// Date d'arrivée
+        #[arg(long)]
+        to: String,
+    },
+    /// Historique daté d'un attribut d'une entité, avec preuve et couverture
+    History {
+        /// Entité, ex. "user:jdupont"
+        #[arg(long)]
+        entity: String,
+        /// Attribut, ex. "user.privileged"
+        #[arg(long)]
+        attr: String,
+        /// Restreindre à une période, ex. 2026-Q1
+        #[arg(long)]
+        period: Option<String>,
+    },
+    /// Chronologie du verdict d'une assertion sur une période
+    Timeline {
+        /// Identifiant de l'assertion, ex. SSH-ROOT
+        #[arg(long)]
+        assertion: String,
+        /// Période, ex. 2026-Q1 ou 2026-03
+        #[arg(long)]
+        period: String,
+        /// Fichier d'assertions
+        #[arg(long, default_value = "assertions.yaml", value_name = "FICHIER")]
+        assertions: PathBuf,
+    },
+    /// Évalue les assertions : verdicts, couverture, violations
+    Check {
+        /// Période d'évaluation, ex. 2026-Q1 (défaut : l'empan des collectes)
+        #[arg(long)]
+        period: Option<String>,
+        /// Explique chaque violation : machine, entité, valeurs, dates, preuve
+        #[arg(long)]
+        explain: bool,
+        /// Fichier d'assertions
+        #[arg(long, default_value = "assertions.yaml", value_name = "FICHIER")]
+        assertions: PathBuf,
+    },
+    /// Génère le dossier de preuve d'une période (HTML autonome, imprimable)
+    Pack {
+        /// Période couverte, ex. 2026-Q1
+        #[arg(long)]
+        period: String,
+        /// Fichier de sortie, ex. dossier-Q1.html
+        #[arg(long, value_name = "FICHIER")]
+        out: PathBuf,
+        /// Référentiel de correspondance, ex. recyf
+        #[arg(long)]
+        referential: Option<String>,
+        /// Fichier d'assertions
+        #[arg(long, default_value = "assertions.yaml", value_name = "FICHIER")]
+        assertions: PathBuf,
+        /// Organisation auditée (page de couverture)
+        #[arg(long)]
+        organization: Option<String>,
+        /// Inventaire des machines attendues (une par ligne, # commente) —
+        /// sans lui, l'écart attendu/observé ne peut pas être constaté
+        #[arg(long, value_name = "FICHIER")]
+        inventory: Option<PathBuf>,
+    },
+    /// Ancre la racine courante du journal hors du système (§6.3)
+    Anchor {
+        /// Écrit la requête d'horodatage RFC 3161 (DER) dans ce fichier
+        #[arg(long, value_name = "FICHIER")]
+        out: Option<PathBuf>,
+        /// Écrit un export de racine signé (niveau 2) dans ce fichier
+        #[arg(long, value_name = "FICHIER")]
+        export: Option<PathBuf>,
+        /// Répertoire des clés de l'agent (pour signer l'export)
+        #[arg(long, value_name = "DOSSIER")]
+        keys: Option<PathBuf>,
+        /// Organisation, inscrite dans le document d'export
+        #[arg(long)]
+        organization: Option<String>,
+    },
+}
+
+fn main() -> miette::Result<()> {
+    let cli = Cli::parse();
+    let store_path = storeopen::resolve_store_path(cli.store);
+
+    match cli.command {
+        Command::State { asset, at } => {
+            let store = storeopen::open_store(&store_path)?;
+            println!("{}", commands::cmd_state(store.as_ref(), &asset, &at)?);
+        }
+        Command::Diff { asset, from, to } => {
+            let store = storeopen::open_store(&store_path)?;
+            println!(
+                "{}",
+                commands::cmd_diff(store.as_ref(), &asset, &from, &to)?
+            );
+        }
+        Command::History {
+            entity,
+            attr,
+            period,
+        } => {
+            let store = storeopen::open_store(&store_path)?;
+            println!(
+                "{}",
+                commands::cmd_history(store.as_ref(), &entity, &attr, period.as_deref())?
+            );
+        }
+        Command::Timeline {
+            assertion,
+            period,
+            assertions,
+        } => {
+            let store = storeopen::open_store(&store_path)?;
+            println!(
+                "{}",
+                commands::cmd_timeline(store.as_ref(), &assertions, &assertion, &period)?
+            );
+        }
+        Command::Check {
+            period,
+            explain,
+            assertions,
+        } => {
+            let store = storeopen::open_store(&store_path)?;
+            let (out, any_fail) =
+                commands::cmd_check(store.as_ref(), &assertions, period.as_deref(), explain)?;
+            println!("{out}");
+            if any_fail {
+                // Code retour 1 : au moins une assertion non conforme.
+                std::process::exit(1);
+            }
+        }
+        Command::Pack {
+            period,
+            out,
+            referential,
+            assertions,
+            organization,
+            inventory,
+        } => {
+            let store = storeopen::open_store(&store_path)?;
+            let args = commands::PackArgs {
+                assertions_path: &assertions,
+                period: &period,
+                out: &out,
+                referential: referential.as_deref(),
+                organization: organization.as_deref(),
+                inventory: inventory.as_deref(),
+            };
+            println!("{}", commands::cmd_pack(store.as_ref(), &args)?);
+        }
+        Command::Anchor {
+            out,
+            export,
+            keys,
+            organization,
+        } => {
+            let store = storeopen::open_store(&store_path)?;
+            let args = commands::AnchorArgs {
+                request_out: out.as_deref(),
+                export_out: export.as_deref(),
+                keys: keys.as_deref(),
+                organization: organization.as_deref(),
+            };
+            println!("{}", commands::cmd_anchor(store.as_ref(), &args)?);
+        }
+    }
+    Ok(())
 }

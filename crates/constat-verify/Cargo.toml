@@ -8,11 +8,17 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# Règle §8 : constat-verify ne dépend que de constat-model et constat-store.
+# Règle §8, non négociable : constat-verify ne dépend QUE de constat-model,
+# constat-store et ed25519-dalek. Toute dépendance supplémentaire doit être
+# refusée — le vérificateur doit rester auditable par un tiers en une heure
+# (§17), et réimplémentable en une centaine de lignes (§10.3).
 constat-model = { workspace = true }
 constat-store = { workspace = true }
 ed25519-dalek = { workspace = true }
-thiserror = { workspace = true }
+
+[[bin]]
+name = "constat-verify"
+path = "src/main.rs"
 
 [lints]
 workspace = true

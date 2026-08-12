@@ -1,0 +1,10 @@
+root:x:0:
+daemon:x:1:
+bin:x:2:
+adm:x:4:jdupont
+sudo:x:27:jdupont
+www-data:x:33:
+backup:x:34:svc-sauvegarde
+jdupont:x:1000:
+mmartin:x:1001:
+svc-sauvegarde:x:998:

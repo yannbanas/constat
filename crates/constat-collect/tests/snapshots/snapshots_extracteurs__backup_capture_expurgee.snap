@@ -1,0 +1,16 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: redacted
+---
+# statut de sauvegarde constat, v1 — capture d'exemple anonymisée
+[srv-fichiers]
+last_success = 2026-08-11T02:14:00Z
+last_restore_test = 2026-06-30T09:00:00Z
+retention_days = 90
+
+[base-de-donnees]
+last_success = 2026-08-11T03:00:00Z
+retention_days = 35
+
+[postes-nomades]
+last_success = 2026-07-02T22:10:00Z

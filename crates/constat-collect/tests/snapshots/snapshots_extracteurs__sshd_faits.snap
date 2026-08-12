@@ -1,0 +1,146 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.AllowTcpForwarding",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.ChallengeResponseAuthentication",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.KbdInteractiveAuthentication",
+        ),
+        value: Text(
+            "no",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.LoginGraceTime",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.MaxAuthTries",
+        ),
+        value: Int(
+            4,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.PasswordAuthentication",
+        ),
+        value: Text(
+            "no",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.PermitEmptyPasswords",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.PermitRootLogin",
+        ),
+        value: Text(
+            "prohibit-password",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.Port",
+        ),
+        value: List(
+            [
+                Int(
+                    22,
+                ),
+                Int(
+                    2222,
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.Protocol",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.PubkeyAuthentication",
+        ),
+        value: Text(
+            "yes",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.UsePAM",
+        ),
+        value: Text(
+            "yes",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.X11Forwarding",
+        ),
+        value: Text(
+            "no",
+        ),
+    },
+]

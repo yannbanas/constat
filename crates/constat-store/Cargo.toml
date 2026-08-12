@@ -18,6 +18,11 @@ rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# Vérification indépendante des empreintes dans les tests d'export.
+blake3 = { workspace = true }
+hex = { workspace = true }
+# Répertoires temporaires pour les tests de RedbStore et de l'export.
+tempfile = "3"
 
 [lints]
 workspace = true
