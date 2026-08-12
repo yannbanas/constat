@@ -14,8 +14,12 @@ use constat_collect::backup::BackupProofCollector;
 use constat_collect::linux::accounts::{
     AccountsCollector, SECTION_GROUP, SECTION_PASSWD, SECTION_SHADOW,
 };
+use constat_collect::linux::kernel_params::KernelParamsCollector;
+use constat_collect::linux::packages::PackagesCollector;
+use constat_collect::linux::ports::{PortsCollector, SECTION_TCP, SECTION_UDP};
 use constat_collect::linux::sshd::SshdCollector;
 use constat_collect::linux::sudoers::SudoersCollector;
+use constat_collect::linux::systemd::{SystemdCollector, SECTION_UNIT_FILES};
 use constat_collect::{capture, Collector, RawCapture};
 
 // ---------------------------------------------------------------------------
@@ -225,6 +229,147 @@ fn anti_fuite_backup() {
         p2 = SECRET_PASSWORD_2,
     );
     assert_pipeline_leak_free(&BackupProofCollector::default(), &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// linux.packages
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_packages() {
+    let hostile = format!(
+        "Package: outil-interne\n\
+         Status: install ok half-configured\n\
+         Version: 1.2-3\n\
+         Maintainer: Op Interne <op@example.invalid> password={p1}\n\
+         Description: paquet hostile\n\
+         \x20note d'un mainteneur : token = {t}\n\
+         \x20cle recopiee : deploy_key={b64}\n\
+         \n\
+         Package: autre\n\
+         Status: install ok installed\n\
+         Version: $6${salt}${hash}\n\
+         Description: version hostile imitant un hachage\n\
+         {pem}\n",
+        p1 = SECRET_PASSWORD_1,
+        t = SECRET_TOKEN,
+        b64 = SECRET_BASE64,
+        salt = SECRET_SHADOW_SHA512_SALT,
+        hash = SECRET_SHADOW_SHA512_HASH,
+        pem = fake_pem("RSA PRIVATE KEY", SECRET_PEM_RSA),
+    );
+    assert_pipeline_leak_free(&PackagesCollector::default(), &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// linux.ports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_ports() {
+    let tcp = format!(
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+         \x20  0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 21001 1\n\
+         # ligne hostile injectee : password={p1}\n\
+         \x20  1: 0100007F:1F90 00000000:0000 0A 0:0 0:0 0 auth_token={t} 0 1\n\
+         $y$j9T${sy}\n",
+        p1 = SECRET_PASSWORD_1,
+        t = SECRET_TOKEN,
+        sy = SECRET_SHADOW_YESCRYPT,
+    );
+    let udp = format!(
+        "session_key {b64}\n{pem}\n",
+        b64 = SECRET_BASE64,
+        pem = fake_pem("EC PRIVATE KEY", SECRET_PEM_EC),
+    );
+    let hostile =
+        capture::join_sections(&[(SECTION_TCP, tcp.as_str()), (SECTION_UDP, udp.as_str())]);
+    assert_pipeline_leak_free(&PortsCollector::default(), &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// linux.systemd — ExecStart et Environment sont les points de fuite classiques
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_systemd() {
+    let unit = format!(
+        "[Unit]\n\
+         Description=Service hostile\n\
+         [Service]\n\
+         User=svc-app\n\
+         Environment=APP_TOKEN={t}\n\
+         Environment=DB_PASSWORD={p1}\n\
+         ExecStart=/usr/bin/app --user admin --password={p2} --verbose\n\
+         # cle privee collee dans l'unite :\n\
+         {pem}\n\
+         # hachage recopie : $2b$12${sb}\n\
+         [Install]\n\
+         WantedBy=multi-user.target\n",
+        t = SECRET_TOKEN,
+        p1 = SECRET_PASSWORD_1,
+        p2 = SECRET_PASSWORD_2,
+        pem = fake_pem("OPENSSH PRIVATE KEY", SECRET_PEM_OPENSSH),
+        sb = SECRET_SHADOW_BCRYPT,
+    );
+    let hostile = capture::join_sections(&[
+        (SECTION_UNIT_FILES, "app.service enabled\n"),
+        ("/etc/systemd/system/app.service", unit.as_str()),
+    ]);
+    assert_pipeline_leak_free(&SystemdCollector::default(), &hostile);
+}
+
+/// L'argument d'`ExecStart` expurgé ne réapparaît pas dans le fait
+/// `service.exec_start` : le fait est extrait de la capture DÉJÀ expurgée.
+#[test]
+fn anti_fuite_systemd_exec_start_expurge_dans_les_faits() {
+    let unit = format!(
+        "[Service]\nExecStart=/usr/bin/app --password={p1}\n",
+        p1 = SECRET_PASSWORD_1
+    );
+    let hostile = capture::join_sections(&[("/etc/systemd/system/app.service", unit.as_str())]);
+    let collector = SystemdCollector::default();
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let facts = collector
+        .extract(&redacted)
+        .unwrap_or_else(|e| panic!("extraction en échec : {e}"));
+    let exec = facts
+        .iter()
+        .find(|f| f.attribute.0 == "service.exec_start")
+        .unwrap_or_else(|| panic!("fait service.exec_start manquant"));
+    let debug = format!("{exec:?}");
+    assert!(
+        debug.contains("/usr/bin/app"),
+        "la commande doit rester : {debug}"
+    );
+    assert!(
+        debug.contains(constat_collect::redact::MARKER_PASSWORD),
+        "le marqueur doit attester le secret : {debug}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// linux.kernel_params — la liste blanche est la seconde ligne de défense
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_kernel_params() {
+    let hostile = format!(
+        "net.ipv4.ip_forward = 0\n\
+         kernel.core_pattern = |/usr/bin/exfiltre --token={t}\n\
+         mot.de.hostile = password={p1}\n\
+         autre.cle.hostile = $6${salt}${hash}\n\
+         {pem}\n\
+         cle.api.secret={b64}\n\
+         kernel.randomize_va_space = 2\n",
+        t = SECRET_TOKEN,
+        p1 = SECRET_PASSWORD_1,
+        salt = SECRET_SHADOW_SHA512_SALT,
+        hash = SECRET_SHADOW_SHA512_HASH,
+        pem = fake_pem("PRIVATE KEY", SECRET_PEM_RSA),
+        b64 = SECRET_BASE64,
+    );
+    assert_pipeline_leak_free(&KernelParamsCollector::default(), &hostile);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,267 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.fs.protected_hardlinks",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.fs.protected_symlinks",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.fs.suid_dumpable",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.dmesg_restrict",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.kptr_restrict",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.randomize_va_space",
+        ),
+        value: Int(
+            2,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.sysrq",
+        ),
+        value: Int(
+            176,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.unprivileged_bpf_disabled",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.kernel.yama.ptrace_scope",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.all.accept_redirects",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.all.accept_source_route",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.all.log_martians",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.all.rp_filter",
+        ),
+        value: Int(
+            2,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.all.send_redirects",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.default.accept_redirects",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.default.accept_source_route",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.conf.default.rp_filter",
+        ),
+        value: Int(
+            2,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.icmp_echo_ignore_broadcasts",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.ip_forward",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv4.tcp_syncookies",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv6.conf.all.accept_ra",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv6.conf.all.accept_redirects",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv6.conf.all.disable_ipv6",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.net.ipv6.conf.all.forwarding",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "host:kernel",
+        ),
+        attribute: Attribute(
+            "sysctl.vm.mmap_min_addr",
+        ),
+        value: Int(
+            65536,
+        ),
+    },
+]

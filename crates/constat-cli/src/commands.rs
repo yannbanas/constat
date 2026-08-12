@@ -3,21 +3,23 @@
 //! Chaque commande renvoie le texte à afficher : la logique est ainsi
 //! exerçable par le test de fumée sur un magasin en mémoire, sans processus.
 //! La CLI ne modifie jamais le magasin — lecture seule, comme tout le
-//! produit (§1).
+//! produit (§1). Les seules écritures sont **à côté** du magasin : le
+//! répertoire d'export (`constat export`), les fichiers d'ancrage
+//! (`constat anchor`) et le dossier de preuve (`constat pack`).
 
 use std::path::Path;
 
-use constat_anchor::rfc3161::TimeStampRequest;
+use constat_anchor::rfc3161::{parse_response, TimeStampRequest};
 use constat_anchor::root::{sign_root_export, RootExportDocument};
 use constat_model::{AssetId, Attribute, EntityId, Timestamp};
 use constat_policy::{Assertion, Evaluation, Verdict};
-use constat_store::{SigningKey, Store};
+use constat_store::Store;
 use constat_time::Period;
 use miette::{miette, IntoDiagnostic};
 
 use crate::coverage::DEFAULT_MAX_EXPECTED_GAP;
 use crate::datetime::{self, format_timestamp, parse_period, parse_timestamp};
-use crate::{eval, queries, render};
+use crate::{anchors, eval, http, keyres, queries, render};
 
 /// `constat state --asset <id> --at <date>` : dernier snapshot antérieur + faits.
 pub fn cmd_state(store: &dyn Store, asset: &str, at: &str) -> miette::Result<String> {
@@ -197,6 +199,13 @@ pub struct PackArgs<'a> {
     /// `#` pour les commentaires). Sans lui, l'écart attendu/observé ne
     /// peut pas être constaté et le dossier le déclare.
     pub inventory: Option<&'a Path>,
+    /// Fichier de clé publique du journal (voir [`crate::keyres`]).
+    pub pubkey: Option<&'a Path>,
+    /// Répertoire des clés de l'agent (`agent.pub`/`agent.key`).
+    pub keys: Option<&'a Path>,
+    /// Chemin du magasin — sert à retrouver le jeton d'horodatage archivé
+    /// pour la racine courante (`<magasin>.anchors/`, voir [`crate::anchors`]).
+    pub store_path: Option<&'a Path>,
 }
 
 /// `constat pack --period <p> --out <fichier>` : dossier de preuve (§10.2),
@@ -307,16 +316,26 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
         ));
     };
     let entry_count = store.entries().into_diagnostic()?.len() as u64;
+    // Clé publique du journal : résolue comme pour `constat export`
+    // (--pubkey, sinon le répertoire de clés de l'agent). Sans clé, le
+    // dossier déclare l'absence — l'auditeur la reçoit de toute façon par
+    // un canal séparé.
+    let public_key = keyres::try_resolve_public_key(args.pubkey, args.keys)?
+        .map(|k| k.to_bytes().to_vec())
+        .unwrap_or_default();
+    // Jeton RFC 3161 : celui archivé par `constat anchor --send` pour la
+    // racine courante, s'il existe. Son absence reste déclarée, jamais
+    // masquée — et un jeton d'une autre racine n'est jamais recyclé.
+    let timestamp_token = match args.store_path {
+        Some(store_path) => anchors::read_token(store_path, &root)?,
+        None => None,
+    };
+    let anchored = timestamp_token.is_some();
     let proof = report::ProofBlock {
         merkle_root: root,
         root_signature: last.signature.clone(),
-        // TODO(integration) : distribution de la clé publique du journal à
-        // la CLI (aujourd'hui elle vit dans le répertoire de clés de
-        // l'agent) — l'auditeur la reçoit par un canal séparé de toute façon.
-        public_key: Vec::new(),
-        // TODO(integration) : joindre le jeton RFC 3161 une fois le
-        // transport d'ancrage câblé (`constat anchor`).
-        timestamp_token: None,
+        public_key,
+        timestamp_token,
         entry_count,
     };
 
@@ -342,48 +361,65 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
     let html = report::render_html(&dossier);
     std::fs::write(args.out, html)
         .map_err(|e| miette!("impossible d'écrire {} : {e}", args.out.display()))?;
+    let anchor_note = if anchored {
+        "\nJeton d'horodatage RFC 3161 joint au dossier (niveau 3, §6.3)."
+    } else {
+        "\nAucun jeton d'horodatage pour la racine courante — absence déclarée dans le \
+         dossier (`constat anchor --send <url>` pour ancrer)."
+    };
     Ok(format!(
-        "Dossier de preuve écrit : {} (HTML autonome, imprimable en PDF).{}",
+        "Dossier de preuve écrit : {} (HTML autonome, imprimable en PDF).{}{}",
         args.out.display(),
+        anchor_note,
         inventory_note
     ))
 }
 
-/// Charge la clé de signature du journal depuis le répertoire de clés de
-/// l'agent (fichier `agent.key`, 32 octets hexadécimaux).
-fn load_signing_key(dir: &Path) -> miette::Result<SigningKey> {
-    let path = dir.join("agent.key");
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        miette!(
-            help = "générez la paire de clés avec `constat-agent keygen`",
-            "impossible de lire la clé {} : {e}",
-            path.display()
-        )
-    })?;
-    let bytes = hex_decode(text.trim()).ok_or_else(|| {
-        miette!(
-            "clé illisible dans {} (hexadécimal attendu)",
-            path.display()
-        )
-    })?;
-    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-        miette!(
-            "clé de taille invalide dans {} (32 octets attendus)",
-            path.display()
-        )
-    })?;
-    Ok(SigningKey::from_bytes(&arr))
+/// Paramètres de `constat export`.
+pub struct ExportArgs<'a> {
+    /// Répertoire de sortie (créé si nécessaire).
+    pub out: &'a Path,
+    /// Fichier de clé publique du journal (voir [`crate::keyres`]).
+    pub pubkey: Option<&'a Path>,
+    /// Répertoire des clés de l'agent (`agent.pub`/`agent.key`).
+    pub keys: Option<&'a Path>,
 }
 
-/// Décodage hexadécimal sans dépendance.
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
+/// `constat export --out <dir>` : produit le répertoire d'export vérifiable
+/// par `constat-verify`, au format normatif de
+/// `crates/constat-verify/FORMAT.md` (§10.3), via
+/// [`constat_store::export_store`].
+///
+/// La clé publique est résolue comme documenté dans [`crate::keyres`]
+/// (`--pubkey`, sinon le répertoire de clés de l'agent). Avant d'écrire,
+/// la chaîne est vérifiée avec cette clé : exporter un journal que la clé
+/// fournie ne vérifie pas produirait un export qui échoue chez l'auditeur.
+pub fn cmd_export(store: &dyn Store, args: &ExportArgs<'_>) -> miette::Result<String> {
+    let key = keyres::resolve_public_key(args.pubkey, args.keys)?;
+    let entries = store.entries().into_diagnostic()?;
+    let Some((root, _)) = entries.last() else {
+        return Err(miette!(
+            "le journal est vide : aucun export de preuve à produire"
+        ));
+    };
+    constat_store::verify_chain(&entries, &key).map_err(|e| {
+        miette!(
+            help = "vérifiez que la clé fournie (--pubkey/--keys) est bien celle qui \
+                    signe ce journal",
+            "le journal ne se vérifie pas avec cette clé publique : {e}"
+        )
+    })?;
+    constat_store::export_store(store, args.out, &key)
+        .map_err(|e| miette!("export vers {} impossible : {e}", args.out.display()))?;
+    Ok(format!(
+        "Export vérifiable écrit : {} ({} entrée(s), clôture complète de la preuve).\n\
+         Racine du journal : {}\n\
+         Vérification par un tiers, sans Constat : constat-verify {}",
+        args.out.display(),
+        entries.len(),
+        root.to_hex(),
+        args.out.display()
+    ))
 }
 
 /// Paramètres de `constat anchor`.
@@ -396,16 +432,26 @@ pub struct AnchorArgs<'a> {
     pub keys: Option<&'a Path>,
     /// Organisation, inscrite dans le document d'export.
     pub organization: Option<&'a str>,
+    /// Envoyer la requête RFC 3161 à ce prestataire (URL `http://…`) et
+    /// archiver le jeton délivré à côté du magasin.
+    pub send: Option<&'a str>,
+    /// Chemin du magasin — sert à situer le répertoire d'ancrage
+    /// (`<magasin>.anchors/`, voir [`crate::anchors`]). Requis avec `send`.
+    pub store_path: Option<&'a Path>,
 }
 
 /// `constat anchor` : ancre la racine courante du journal (§6.3).
 ///
 /// - `--export <fichier>` : export de racine **signé** (niveau 2) — un
 ///   document canonique à envoyer hors du système (courriel au RSSI, dépôt
-///   tiers). Fonctionnel.
+///   tiers).
 /// - `--out <fichier>` : requête d'horodatage RFC 3161 (DER), prête à être
 ///   envoyée au prestataire (`Content-Type: application/timestamp-query`).
-///   Fonctionnel ; l'envoi HTTP automatique reste un TODO(integration).
+/// - `--send <url>` : envoie la requête RFC 3161 au prestataire (niveau 3)
+///   et archive la réponse délivrée dans `<magasin>.anchors/<racine>.tsr`
+///   (voir [`crate::anchors`]) ; `constat pack` la joindra au dossier.
+///   Un refus du prestataire est une **erreur** (code de sortie 1), avec le
+///   motif renvoyé.
 pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<String> {
     let Some((root, entry)) = store.last_entry().into_diagnostic()? else {
         return Ok("Le journal est vide — rien à ancrer.".to_string());
@@ -421,8 +467,8 @@ pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<St
         let keys_dir = args
             .keys
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("./constat-agent.keys"));
-        let key = load_signing_key(&keys_dir)?;
+            .unwrap_or_else(|| std::path::PathBuf::from(keyres::DEFAULT_KEYS_DIR));
+        let key = keyres::load_signing_key(&keys_dir)?;
         let export = sign_root_export(
             RootExportDocument {
                 root,
@@ -453,9 +499,50 @@ pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<St
         out.push_str(&format!(
             "Requête d'horodatage RFC 3161 écrite : {} — à envoyer au prestataire :\n  \
              curl -s -H 'Content-Type: application/timestamp-query' \
-             --data-binary @{} https://<prestataire>/tsa > jeton.tsr\n\
-             (TODO(integration) : l'envoi HTTP automatique et la vérification du \
-             jeton seront câblés dans constat-anchor.)\n",
+             --data-binary @{} https://<prestataire>/tsa > jeton.tsr\n",
+            path.display(),
+            path.display()
+        ));
+        did_something = true;
+    }
+
+    if let Some(url) = args.send {
+        let store_path = args.store_path.ok_or_else(|| {
+            miette!("chemin du magasin inconnu : impossible de situer le répertoire d'ancrage")
+        })?;
+        let request = TimeStampRequest::for_root(&root);
+        let response = http::post(
+            url,
+            "application/timestamp-query",
+            "application/timestamp-reply",
+            &request.to_der(),
+        )?;
+        if response.status != 200 {
+            return Err(miette!(
+                "le prestataire d'horodatage a répondu HTTP {} {}",
+                response.status,
+                response.reason
+            ));
+        }
+        let parsed = parse_response(&response.body)
+            .map_err(|e| miette!("réponse d'horodatage illisible depuis {url} : {e}"))?;
+        if !parsed.status.is_granted() {
+            let motif = if parsed.status_text.is_empty() {
+                "aucun motif fourni".to_string()
+            } else {
+                parsed.status_text.join(" ; ")
+            };
+            return Err(miette!(
+                help = "le journal n'est pas ancré : réessayez, ou changez de prestataire",
+                "horodatage refusé par {url} ({:?}) : {motif}",
+                parsed.status
+            ));
+        }
+        let path = anchors::write_response(store_path, &root, &response.body)?;
+        out.push_str(&format!(
+            "Jeton d'horodatage RFC 3161 délivré (niveau 3) et archivé : {}\n\
+             `constat pack` le joindra au dossier de preuve de cette racine.\n\
+             Vérification indépendante : openssl ts -reply -in {} -text\n",
             path.display(),
             path.display()
         ));
@@ -467,7 +554,8 @@ pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<St
             "Rappel (§6.2) : sans ancrage externe, le journal prouve la cohérence \
              interne, pas la non-répudiation.\n\
              - `constat anchor --export racine.export` : export de racine signé (niveau 2)\n\
-             - `constat anchor --out requete.tsq`     : requête d'horodatage RFC 3161 (niveau 3)\n",
+             - `constat anchor --out requete.tsq`     : requête d'horodatage RFC 3161 (niveau 3)\n\
+             - `constat anchor --send http://…`       : envoi direct au prestataire (niveau 3)\n",
         );
     }
     Ok(out)

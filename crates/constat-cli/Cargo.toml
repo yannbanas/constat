@@ -23,5 +23,12 @@ clap = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+# Tests uniquement : revérification complète d'un export (constat-verify est
+# le vérificateur autonome du §10.3) et relecture des fichiers CBOR canoniques.
+constat-verify = { workspace = true }
+ciborium = { workspace = true }
+serde = { workspace = true }
+
 [lints]
 workspace = true

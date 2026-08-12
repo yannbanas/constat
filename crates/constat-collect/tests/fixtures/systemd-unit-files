@@ -1,0 +1,10 @@
+UNIT FILE                              STATE           PRESET
+ssh.service                            enabled         enabled
+apache2.service                        enabled         enabled
+sauvegarde.service                     enabled         enabled
+getty@.service                         enabled         enabled
+telemetrie.service                     disabled        enabled
+dbus.service                           static          -
+vieux-agent.service                    masked          enabled
+
+7 unit files listed.

@@ -1,0 +1,114 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "pkg:agent-metrologie",
+        ),
+        attribute: Attribute(
+            "pkg.status",
+        ),
+        value: Text(
+            "half-configured",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:agent-metrologie",
+        ),
+        attribute: Attribute(
+            "pkg.version",
+        ),
+        value: Text(
+            "2.4.1-1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:ancien-outil",
+        ),
+        attribute: Attribute(
+            "pkg.status",
+        ),
+        value: Text(
+            "config-files",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:ancien-outil",
+        ),
+        attribute: Attribute(
+            "pkg.version",
+        ),
+        value: Text(
+            "0.9-3",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:openssh-server",
+        ),
+        attribute: Attribute(
+            "pkg.status",
+        ),
+        value: Text(
+            "installed",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:openssh-server",
+        ),
+        attribute: Attribute(
+            "pkg.version",
+        ),
+        value: Text(
+            "1:9.2p1-2+deb12u3",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:openssl",
+        ),
+        attribute: Attribute(
+            "pkg.status",
+        ),
+        value: Text(
+            "installed",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:openssl",
+        ),
+        attribute: Attribute(
+            "pkg.version",
+        ),
+        value: Text(
+            "3.0.13-1~deb12u1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:sans-version",
+        ),
+        attribute: Attribute(
+            "pkg.status",
+        ),
+        value: Text(
+            "unpacked",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "pkg:sans-version",
+        ),
+        attribute: Attribute(
+            "pkg.version",
+        ),
+        value: Absent,
+    },
+]

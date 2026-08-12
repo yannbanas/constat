@@ -411,6 +411,9 @@ fn check_pack_et_anchor_repondent_sur_le_scenario() {
             referential: None,
             organization: Some("Exemple SARL"),
             inventory: None,
+            pubkey: None,
+            keys: None,
+            store_path: None,
         },
     )
     .expect("pack");
@@ -441,6 +444,8 @@ fn check_pack_et_anchor_repondent_sur_le_scenario() {
             export_out: Some(&export_path),
             keys: Some(&keys_dir),
             organization: Some("Exemple SARL"),
+            send: None,
+            store_path: None,
         },
     )
     .expect("anchor");

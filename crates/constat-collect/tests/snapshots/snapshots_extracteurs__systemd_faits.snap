@@ -1,0 +1,125 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "service:apache2",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:apache2",
+        ),
+        attribute: Attribute(
+            "service.exec_start",
+        ),
+        value: Text(
+            "/usr/sbin/apachectl start",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:apache2",
+        ),
+        attribute: Attribute(
+            "service.user",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:dbus",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Text(
+            "static",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:getty@",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sauvegarde",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sauvegarde",
+        ),
+        attribute: Attribute(
+            "service.exec_start",
+        ),
+        value: Text(
+            "/usr/local/bin/sauvegarde --repository /srv/depot --password=[EXPURGÉ:mot-de-passe]",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sauvegarde",
+        ),
+        attribute: Attribute(
+            "service.user",
+        ),
+        value: Text(
+            "svc-sauvegarde",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:ssh",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:telemetrie",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Bool(
+            false,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:vieux-agent",
+        ),
+        attribute: Attribute(
+            "service.enabled",
+        ),
+        value: Text(
+            "masked",
+        ),
+    },
+]

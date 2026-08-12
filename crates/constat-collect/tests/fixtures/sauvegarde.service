@@ -1,0 +1,15 @@
+# Unite de sauvegarde nocturne — capture d'exemple anonymisee (srv-fic-01)
+[Unit]
+Description=Sauvegarde nocturne vers le depot interne
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=svc-sauvegarde
+Environment=RESTIC_PASSWORD=UnSecretColleLaParErreur123
+ExecStart=/usr/local/bin/sauvegarde --repository /srv/depot --password=AutreSecretDansLaCommande
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

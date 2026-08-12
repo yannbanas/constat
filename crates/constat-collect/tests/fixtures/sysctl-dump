@@ -1,0 +1,23 @@
+# dump sysctl — capture d'exemple anonymisee (srv-fic-01)
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+fs.suid_dumpable = 0
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 1
+kernel.randomize_va_space = 2
+kernel.sysrq = 176
+kernel.yama.ptrace_scope = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.all.log_martians = 0
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.ip_forward = 0
+net.ipv4.tcp_syncookies = 1
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.all.forwarding = 0
+vm.mmap_min_addr = 65536
+# hors liste blanche : doivent etre ignorees (ni bruit, ni fuite)
+kernel.hostname = srv-interne-a-ne-pas-remonter
+net.core.somaxconn = 4096
+kernel.core_pattern = |/usr/share/apport/apport %p %s %c %d %P %E

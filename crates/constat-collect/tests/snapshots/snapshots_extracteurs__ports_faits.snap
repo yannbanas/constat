@@ -1,0 +1,211 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "port:tcp/22",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: List(
+            [
+                Text(
+                    "0.0.0.0",
+                ),
+                Text(
+                    "::",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/22",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/22",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/3306",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: Text(
+            "127.0.0.1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/3306",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/3306",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            102,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/5432",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: Text(
+            "127.0.0.1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/5432",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/5432",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            106,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/8080",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: Text(
+            "::1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/8080",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:tcp/8080",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            1000,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/123",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: Text(
+            "127.0.0.1",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/123",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/123",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            108,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/68",
+        ),
+        attribute: Attribute(
+            "port.bind_address",
+        ),
+        value: Text(
+            "0.0.0.0",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/68",
+        ),
+        attribute: Attribute(
+            "port.listening",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "port:udp/68",
+        ),
+        attribute: Attribute(
+            "port.uid",
+        ),
+        value: Int(
+            101,
+        ),
+    },
+]

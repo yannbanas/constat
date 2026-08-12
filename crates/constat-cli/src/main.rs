@@ -6,8 +6,9 @@
 //! constat history  --entity "user:jdupont" --attr "user.privileged"
 //! constat timeline --assertion SSH-ROOT --period 2026-Q1
 //! constat check    --period 2026-Q1 --explain
-//! constat pack     --period 2026-Q1 --out dossier-Q1.pdf
-//! constat anchor
+//! constat pack     --period 2026-Q1 --out dossier-Q1.html
+//! constat anchor   --send http://tsa.exemple.fr/tsr
+//! constat export   --out ./export
 //! ```
 
 use std::path::PathBuf;
@@ -113,6 +114,12 @@ enum Command {
         /// sans lui, l'écart attendu/observé ne peut pas être constaté
         #[arg(long, value_name = "FICHIER")]
         inventory: Option<PathBuf>,
+        /// Fichier de clé publique du journal (hexadécimal ou 32 octets bruts)
+        #[arg(long, value_name = "FICHIER")]
+        pubkey: Option<PathBuf>,
+        /// Répertoire des clés de l'agent (agent.pub / agent.key)
+        #[arg(long, value_name = "DOSSIER")]
+        keys: Option<PathBuf>,
     },
     /// Ancre la racine courante du journal hors du système (§6.3)
     Anchor {
@@ -122,12 +129,28 @@ enum Command {
         /// Écrit un export de racine signé (niveau 2) dans ce fichier
         #[arg(long, value_name = "FICHIER")]
         export: Option<PathBuf>,
+        /// Envoie la requête RFC 3161 à ce prestataire (http:// uniquement)
+        /// et archive le jeton dans <magasin>.anchors/<racine>.tsr
+        #[arg(long, value_name = "URL")]
+        send: Option<String>,
         /// Répertoire des clés de l'agent (pour signer l'export)
         #[arg(long, value_name = "DOSSIER")]
         keys: Option<PathBuf>,
         /// Organisation, inscrite dans le document d'export
         #[arg(long)]
         organization: Option<String>,
+    },
+    /// Exporte la clôture de preuve du journal, vérifiable par constat-verify
+    Export {
+        /// Répertoire de sortie (créé si nécessaire)
+        #[arg(long, value_name = "DOSSIER")]
+        out: PathBuf,
+        /// Fichier de clé publique du journal (hexadécimal ou 32 octets bruts)
+        #[arg(long, value_name = "FICHIER")]
+        pubkey: Option<PathBuf>,
+        /// Répertoire des clés de l'agent (agent.pub / agent.key)
+        #[arg(long, value_name = "DOSSIER")]
+        keys: Option<PathBuf>,
     },
 }
 
@@ -190,6 +213,8 @@ fn main() -> miette::Result<()> {
             assertions,
             organization,
             inventory,
+            pubkey,
+            keys,
         } => {
             let store = storeopen::open_store(&store_path)?;
             let args = commands::PackArgs {
@@ -199,12 +224,16 @@ fn main() -> miette::Result<()> {
                 referential: referential.as_deref(),
                 organization: organization.as_deref(),
                 inventory: inventory.as_deref(),
+                pubkey: pubkey.as_deref(),
+                keys: keys.as_deref(),
+                store_path: Some(&store_path),
             };
             println!("{}", commands::cmd_pack(store.as_ref(), &args)?);
         }
         Command::Anchor {
             out,
             export,
+            send,
             keys,
             organization,
         } => {
@@ -214,8 +243,19 @@ fn main() -> miette::Result<()> {
                 export_out: export.as_deref(),
                 keys: keys.as_deref(),
                 organization: organization.as_deref(),
+                send: send.as_deref(),
+                store_path: Some(&store_path),
             };
             println!("{}", commands::cmd_anchor(store.as_ref(), &args)?);
+        }
+        Command::Export { out, pubkey, keys } => {
+            let store = storeopen::open_store(&store_path)?;
+            let args = commands::ExportArgs {
+                out: &out,
+                pubkey: pubkey.as_deref(),
+                keys: keys.as_deref(),
+            };
+            println!("{}", commands::cmd_export(store.as_ref(), &args)?);
         }
     }
     Ok(())

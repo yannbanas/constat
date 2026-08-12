@@ -56,6 +56,12 @@ pub fn all_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(backup::BackupProofCollector::default()),
         Box::new(linux::sshd::SshdCollector::default()),
         Box::new(linux::sudoers::SudoersCollector::default()),
+        // priorité haute (§7.3) : correctifs (délai réel d'application)…
+        Box::new(linux::packages::PackagesCollector::default()),
+        // …puis segmentation (qu'est-ce qui écoute), services, durcissement
+        Box::new(linux::ports::PortsCollector::default()),
+        Box::new(linux::systemd::SystemdCollector::default()),
+        Box::new(linux::kernel_params::KernelParamsCollector::default()),
     ]
 }
 
@@ -72,7 +78,11 @@ mod tests {
                 "linux.accounts",
                 "backup.proof",
                 "linux.sshd",
-                "linux.sudoers"
+                "linux.sudoers",
+                "linux.packages",
+                "linux.ports",
+                "linux.systemd",
+                "linux.kernel_params"
             ]
         );
     }

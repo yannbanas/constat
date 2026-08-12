@@ -5,9 +5,9 @@
 //! Ce serveur reçoit ; il n'agit jamais sur le parc. Il n'initie aucune
 //! connexion vers les machines auditées et ses réponses aux agents sont des
 //! accusés de réception sans contenu exécutable ni configuration (voir
-//! [`receive`]). Compromettre le serveur ne donne pas le contrôle du parc,
-//! parce que le serveur n'a aucun moyen d'agir sur lui — c'est une propriété
-//! de construction, pas un réglage.
+//! [`constat_server::receive`]). Compromettre le serveur ne donne pas le
+//! contrôle du parc, parce que le serveur n'a aucun moyen d'agir sur lui —
+//! c'est une propriété de construction, pas un réglage.
 //!
 //! # mTLS obligatoire
 //!
@@ -16,14 +16,12 @@
 //! TLS pour essayer » : un dépôt de données sensibles ne s'essaie pas en
 //! clair.
 
-// Interface d'attente : contrat de réception documenté, consommé par le
-// câblage rustls à venir (TODO(integration) dans receive.rs).
-#[allow(dead_code)]
-mod receive;
-
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
+use constat_server::serve;
+use constat_store::RedbStore;
 use miette::miette;
 
 #[derive(Parser)]
@@ -63,11 +61,8 @@ enum Command {
     },
 }
 
-/// Configuration validée du serveur. Les champs mTLS seront consommés par
-/// l'écouteur rustls (TODO(integration)) ; ils sont validés dès maintenant
-/// pour que le refus de démarrer sans mTLS soit effectif au premier jour.
+/// Configuration validée du serveur.
 #[derive(Debug)]
-#[allow(dead_code)]
 struct ServerConfig {
     listen: String,
     cert: PathBuf,
@@ -129,23 +124,31 @@ fn main() -> miette::Result<()> {
             store,
         } => {
             let config = validate(listen, cert, key, client_ca, store)?;
+
+            // mTLS d'abord : sans les trois fichiers valides, rien ne démarre.
+            let tls = serve::load_tls(&config.cert, &config.key, &config.client_ca)?;
+
+            let store = RedbStore::open(&config.store).map_err(|e| {
+                miette!(
+                    "impossible d'ouvrir le magasin {} : {e}",
+                    config.store.display()
+                )
+            })?;
+            let shared: serve::SharedStore = Arc::new(Mutex::new(store));
+
+            let server = serve::Server::bind(&config.listen, tls, shared)?;
+            let addr = server
+                .local_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| config.listen.clone());
             eprintln!(
-                "Configuration valide : écoute prévue sur {}, magasin {}.",
-                config.listen,
-                config.store.display()
+                "constat-server en écoute sur {addr} — magasin {} — mTLS exigé \
+                 (autorité des agents : {}). Réception uniquement : ce serveur \
+                 n'initie jamais de connexion vers le parc (§17).",
+                config.store.display(),
+                config.client_ca.display()
             );
-            // Pas de serveur factice : tant que la réception n'est pas
-            // implémentée, on refuse de démarrer plutôt que de faire
-            // semblant d'accepter des poussées.
-            Err(miette!(
-                help = "TODO(integration) : brancher l'écouteur rustls (mTLS, \
-                        certificat client obligatoire) et une implémentation de \
-                        `receive::Receiver` sur le magasin concret de constat-store ; \
-                        l'interface et le protocole sont documentés dans \
-                        crates/constat-server/src/receive.rs",
-                "la réception n'est pas encore implémentée : le serveur ne démarre pas \
-                 (aucun serveur factice ne sera lancé)"
-            ))
+            server.run()
         }
     }
 }

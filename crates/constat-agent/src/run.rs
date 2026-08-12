@@ -8,6 +8,11 @@
 //! - **jamais de données simulées présentées comme réelles** — si aucun
 //!   collecteur n'est applicable à la plateforme, l'agent le dit et n'écrit
 //!   rien.
+//!
+//! La collecte est scindée en deux phases : [`collect_all`] (lecture seule,
+//! aucune clé ni magasin requis) puis [`persist`] (écriture + signature).
+//! Cette séparation permet au binaire de constater qu'il n'y a rien à
+//! collecter **avant** d'exiger les clés de signature.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +30,25 @@ pub enum RunError {
         "aucune donnée partielle n'a été journalisée ; corrigez la cause et relancez"
     ))]
     AllFailed(String),
+}
+
+/// Résultat de la phase de lecture ([`collect_all`]) : rien n'a encore été
+/// écrit, aucune clé n'a été chargée.
+#[derive(Debug)]
+pub struct Collection {
+    /// Blobs prêts à écrire : (collecteur, blob expurgé, nombre de faits).
+    pub blobs: Vec<(CollectorId, Blob, usize)>,
+    /// Collecteurs indisponibles sur cette plateforme (déclarés).
+    pub unavailable: Vec<(CollectorId, String)>,
+    /// Collecteurs en échec réel : (identifiant, cause). Déclarés, jamais masqués.
+    pub failed: Vec<(CollectorId, String)>,
+}
+
+impl Collection {
+    /// Rien à écrire : aucun collecteur n'a produit de blob.
+    pub fn is_empty(&self) -> bool {
+        self.blobs.is_empty()
+    }
 }
 
 /// Compte rendu d'une collecte.
@@ -45,7 +69,6 @@ pub enum RunOutcome {
 pub struct RunReport {
     pub asset: AssetId,
     /// Date de la collecte — portée pour les appelants (poussée, tests).
-    #[allow(dead_code)]
     pub at: Timestamp,
     /// Collecteurs réussis : (identifiant, empreinte du blob, nombre de faits).
     pub collected: Vec<(CollectorId, BlobHash, usize)>,
@@ -59,18 +82,11 @@ pub struct RunReport {
     pub entry: BlobHash,
 }
 
-/// Exécute tous les collecteurs, construit les blobs et le snapshot, écrit
-/// dans le magasin local, puis ajoute l'entrée de journal signée
-/// ([`constat_store::append_signed`] : chaînage `prev` automatique).
-pub fn run_once(
-    store: &mut dyn Store,
-    signer: &Signer,
-    collectors: &[Box<dyn Collector>],
-    asset: AssetId,
-    now: Timestamp,
-) -> Result<RunOutcome, RunError> {
-    let mut blobs: BTreeMap<CollectorId, BlobHash> = BTreeMap::new();
-    let mut collected = Vec::new();
+/// Phase 1 — exécute tous les collecteurs, expurge, extrait les faits.
+///
+/// Lecture seule : aucun magasin ouvert, aucune clé chargée, rien d'écrit.
+pub fn collect_all(collectors: &[Box<dyn Collector>]) -> Collection {
+    let mut blobs = Vec::new();
     let mut unavailable = Vec::new();
     let mut failed = Vec::new();
 
@@ -92,36 +108,56 @@ pub fn run_once(
                             raw: redacted.0,
                             facts,
                         };
-                        let hash = store.put_blob(&blob)?;
-                        blobs.insert(id.clone(), hash);
-                        collected.push((id, hash, fact_count));
+                        blobs.push((id, blob, fact_count));
                     }
                 }
             }
         }
     }
 
-    if blobs.is_empty() {
-        if failed.is_empty() {
-            // Plateforme sans collecteur applicable : sortie honnête.
-            return Ok(RunOutcome::NothingAvailable { unavailable });
-        }
-        let causes: Vec<String> = failed
-            .iter()
-            .map(|(id, e)| format!("{} : {e}", id.0))
-            .collect();
-        return Err(RunError::AllFailed(causes.join(" ; ")));
+    Collection {
+        blobs,
+        unavailable,
+        failed,
+    }
+}
+
+/// Phase 2 — écrit les blobs et le snapshot dans le magasin, puis ajoute
+/// l'entrée de journal signée ([`constat_store::append_signed`] : chaînage
+/// `prev` automatique).
+///
+/// À n'appeler que si [`Collection::is_empty`] est faux : la phase d'écriture
+/// suppose qu'il y a quelque chose à journaliser.
+pub fn persist(
+    store: &mut dyn Store,
+    signer: &Signer,
+    collection: Collection,
+    asset: AssetId,
+    now: Timestamp,
+) -> Result<RunReport, RunError> {
+    let Collection {
+        blobs,
+        unavailable,
+        failed,
+    } = collection;
+
+    let mut hashes: BTreeMap<CollectorId, BlobHash> = BTreeMap::new();
+    let mut collected = Vec::new();
+    for (id, blob, fact_count) in blobs {
+        let hash = store.put_blob(&blob)?;
+        hashes.insert(id.clone(), hash);
+        collected.push((id, hash, fact_count));
     }
 
     let snapshot = Snapshot {
         asset: asset.clone(),
         at: now,
-        blobs,
+        blobs: hashes,
     };
     let snapshot_hash = store.put_snapshot(&snapshot)?;
     let (entry_hash, _) = append_signed(store, signer, vec![snapshot_hash], now)?;
 
-    Ok(RunOutcome::Collected(RunReport {
+    Ok(RunReport {
         asset,
         at: now,
         collected,
@@ -129,7 +165,39 @@ pub fn run_once(
         failed,
         snapshot: snapshot_hash,
         entry: entry_hash,
-    }))
+    })
+}
+
+/// Les deux phases enchaînées — pour les appelants qui disposent déjà du
+/// magasin et des clés. Le binaire, lui, appelle [`collect_all`] d'abord
+/// pour ne pas exiger de clés quand il n'y a rien à collecter.
+pub fn run_once(
+    store: &mut dyn Store,
+    signer: &Signer,
+    collectors: &[Box<dyn Collector>],
+    asset: AssetId,
+    now: Timestamp,
+) -> Result<RunOutcome, RunError> {
+    let collection = collect_all(collectors);
+    if collection.is_empty() {
+        if collection.failed.is_empty() {
+            // Plateforme sans collecteur applicable : sortie honnête.
+            return Ok(RunOutcome::NothingAvailable {
+                unavailable: collection.unavailable,
+            });
+        }
+        return Err(RunError::AllFailed(all_failed_causes(&collection.failed)));
+    }
+    persist(store, signer, collection, asset, now).map(RunOutcome::Collected)
+}
+
+/// Concatène les causes d'échec pour [`RunError::AllFailed`].
+pub fn all_failed_causes(failed: &[(CollectorId, String)]) -> String {
+    failed
+        .iter()
+        .map(|(id, e)| format!("{} : {e}", id.0))
+        .collect::<Vec<_>>()
+        .join(" ; ")
 }
 
 /// L'instant présent, en millisecondes UTC depuis l'époque Unix.

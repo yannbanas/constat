@@ -1,0 +1,49 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: redacted
+---
+Package: openssh-server
+Status: install ok installed
+Priority: optional
+Section: net
+Installed-Size: 1993
+Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.example.invalid>
+Architecture: amd64
+Version: 1:9.2p1-2+deb12u3
+Depends: openssh-client, libc6 (>= 2.34)
+Description: secure shell (SSH) server, for secure access from remote machines
+ This package provides the sshd server.
+ .
+ Suite de description sur plusieurs lignes.
+
+Package: openssl
+Status: install ok installed
+Priority: optional
+Section: utils
+Architecture: amd64
+Version: 3.0.13-1~deb12u1
+Description: Secure Sockets Layer toolkit - cryptographic utility
+
+Package: agent-metrologie
+Status: install ok half-configured
+Priority: extra
+Section: admin
+Architecture: amd64
+Version: 2.4.1-1
+Description: agent interne de metrologie
+ La post-installation a echoue : paquet semi-configure.
+
+Package: ancien-outil
+Status: deinstall ok config-files
+Priority: optional
+Section: admin
+Architecture: all
+Version: 0.9-3
+Description: outil retire, fichiers de configuration conserves
+
+Package: sans-version
+Status: install ok unpacked
+Priority: optional
+Section: misc
+Architecture: all
+Description: paquet depaquete sans champ Version (cas Absent)

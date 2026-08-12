@@ -16,6 +16,14 @@ miette = { workspace = true, features = ["fancy"] }
 hex = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Transport de la poussée sortante (§7.1) : rustls synchrone sur
+# std::net::TcpStream — pas de runtime async, pas de bibliothèque HTTP.
+# Fournisseur cryptographique `ring` explicitement (et non le défaut
+# aws-lc-rs) : compilation portable sans cmake/NASM, surface plus réduite.
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
+# Lecture des fichiers PEM (certificat client, clé, autorité du serveur).
+# 1.10 au minimum : le module `pem` (PemObject) n'existe pas avant.
+rustls-pki-types = { version = "1.10", features = ["std"] }
 
 [lints]
 workspace = true

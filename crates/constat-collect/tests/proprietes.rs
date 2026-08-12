@@ -5,8 +5,14 @@
 
 use constat_collect::backup::{extract_backup_facts, parse_utc_timestamp_ms};
 use constat_collect::linux::accounts::{extract_accounts_facts, redact_accounts_capture};
+use constat_collect::linux::kernel_params::{
+    extract_kernel_params_facts, redact_kernel_params_capture, TRACKED_SYSCTL_KEYS,
+};
+use constat_collect::linux::packages::extract_packages_facts;
+use constat_collect::linux::ports::{extract_ports_facts, normalize_kernel_hex_address};
 use constat_collect::linux::sshd::extract_sshd_facts;
 use constat_collect::linux::sudoers::extract_sudoers_facts;
+use constat_collect::linux::systemd::extract_systemd_facts;
 use constat_collect::{capture, redact, RawCapture};
 use proptest::prelude::*;
 
@@ -57,6 +63,84 @@ proptest! {
     #[test]
     fn horodatage_ne_panique_jamais(s in "\\PC{0,60}") {
         let _ = parse_utc_timestamp_ms(&s);
+    }
+
+    #[test]
+    fn extracteur_packages_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_packages_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_ports_ne_panique_jamais(
+        tcp in "(?:\\PC|[\\n\\t]){0,300}",
+        tcp6 in "(?:\\PC|[\\n\\t]){0,300}",
+        udp in "(?:\\PC|[\\n\\t]){0,300}",
+    ) {
+        let _ = extract_ports_facts(&tcp, &tcp6, &udp);
+    }
+
+    /// Le format hexadécimal du noyau est une entrée hostile à part entière :
+    /// lignes plausibles mais tronquées ou corrompues, jamais de panique.
+    #[test]
+    fn lignes_proc_net_plausibles_ne_paniquent_jamais(
+        sl in "[0-9]{1,4}",
+        addr in "[0-9A-Fa-fZ]{0,40}",
+        port in "[0-9A-Fa-fZ]{0,6}",
+        st in "[0-9A-Fa-fZ]{0,3}",
+        uid in "-?[0-9]{0,12}",
+        tronquer in 0usize..8,
+    ) {
+        let full = format!(
+            "   {sl}: {addr}:{port} 00000000:0000 {st} 00000000:00000000 00:00000000 00000000 {uid} 0 12345 1"
+        );
+        let words: Vec<&str> = full.split_whitespace().collect();
+        let kept = words.len().saturating_sub(tronquer);
+        let line = words[..kept].join(" ");
+        let _ = extract_ports_facts(&line, &line, &line);
+        let _ = normalize_kernel_hex_address(&addr);
+    }
+
+    #[test]
+    fn extracteur_systemd_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_systemd_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_kernel_params_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_kernel_params_facts(&s);
+    }
+
+    /// La liste blanche sysctl est étanche, aux DEUX niveaux : la valeur
+    /// d'une clé hors liste blanche ne survit ni dans la capture expurgée,
+    /// ni dans les faits — et seuls des attributs `sysctl.<clé de la liste
+    /// blanche>` sortent.
+    #[test]
+    fn sysctl_hors_liste_blanche_jamais_survivant(
+        cle in "[a-z][a-z0-9._]{0,40}",
+        valeur in "HORSLISTE[a-zA-Z0-9]{4,24}",
+    ) {
+        prop_assume!(!TRACKED_SYSCTL_KEYS.contains(&cle.as_str()));
+        let brut = format!("{cle} = {valeur}\n");
+        let expurge = redact_kernel_params_capture(&brut);
+        prop_assert!(
+            !expurge.contains(&valeur),
+            "valeur hors liste blanche dans la capture expurgée : {expurge:?}"
+        );
+        let facts = extract_kernel_params_facts(&expurge);
+        let debug = format!("{facts:?}");
+        prop_assert!(!debug.contains(&valeur), "valeur hors liste blanche remontée : {debug}");
+        for fact in &facts {
+            let attr = fact.attribute.0.as_str();
+            prop_assert!(
+                TRACKED_SYSCTL_KEYS.iter().any(|k| attr == format!("sysctl.{k}")),
+                "attribut hors liste blanche : {attr}"
+            );
+        }
+    }
+
+    #[test]
+    fn expurgation_kernel_params_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = redact_kernel_params_capture(&s);
     }
 
     #[test]
