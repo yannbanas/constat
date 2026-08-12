@@ -1,0 +1,23 @@
+[package]
+name = "constat-store"
+description = "Magasin adressé par contenu + journal Merkle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+redb = { workspace = true }
+zstd = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

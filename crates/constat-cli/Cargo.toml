@@ -1,0 +1,26 @@
+[package]
+name = "constat-cli"
+description = "Interface en ligne de commande de Constat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "constat"
+path = "src/main.rs"
+
+[dependencies]
+constat-model = { workspace = true }
+constat-time = { workspace = true }
+constat-policy = { workspace = true }
+constat-diff = { workspace = true }
+constat-store = { workspace = true }
+constat-report = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+serde_yaml = { workspace = true }
+
+[lints]
+workspace = true

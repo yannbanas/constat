@@ -1,0 +1,18 @@
+[package]
+name = "constat-agent"
+description = "Agent de collecte : lecture seule, aucun port en écoute, poussée sortante mTLS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+constat-collect = { workspace = true }
+constat-store = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+
+[lints]
+workspace = true

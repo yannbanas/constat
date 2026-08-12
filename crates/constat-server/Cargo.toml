@@ -1,0 +1,17 @@
+[package]
+name = "constat-server"
+description = "Serveur collecteur : réception mTLS, aucun chemin de retour vers le parc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+constat-store = { workspace = true }
+clap = { workspace = true }
+miette = { workspace = true }
+
+[lints]
+workspace = true

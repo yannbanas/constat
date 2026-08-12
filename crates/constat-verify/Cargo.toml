@@ -1,0 +1,18 @@
+[package]
+name = "constat-verify"
+description = "Vérificateur autonome — minuscule et auditable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Règle §8 : constat-verify ne dépend que de constat-model et constat-store.
+constat-model = { workspace = true }
+constat-store = { workspace = true }
+ed25519-dalek = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

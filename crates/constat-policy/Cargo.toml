@@ -1,0 +1,22 @@
+[package]
+name = "constat-policy"
+description = "Cœur pur : assertions, évaluation, explications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+constat-time = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+insta = { workspace = true }
+
+[lints]
+workspace = true

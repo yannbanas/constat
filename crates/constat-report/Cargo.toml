@@ -1,0 +1,21 @@
+[package]
+name = "constat-report"
+description = "Dossiers de preuve, tables de correspondance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+constat-time = { workspace = true }
+constat-policy = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
+[lints]
+workspace = true

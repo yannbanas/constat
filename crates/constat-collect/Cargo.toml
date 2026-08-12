@@ -1,0 +1,20 @@
+[package]
+name = "constat-collect"
+description = "Collecteurs : lecture seule, expurgation à la source"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+constat-model = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true
