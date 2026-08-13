@@ -74,6 +74,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          # Uniquement nos archives : docker/build-push-action téléverse aussi
+          # un artefact *.dockerbuild (journal de build) parfois corrompu, qui
+          # faisait échouer le téléchargement sans ce filtre.
+          pattern: dist-*
       - name: Attacher les binaires à la release
         uses: softprops/action-gh-release@v2
         with:
