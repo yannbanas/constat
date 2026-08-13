@@ -14,7 +14,7 @@ thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
 # Le digest d'une TimeStampReq RFC 3161 est SHA-256 (les prestataires
 # n'acceptent pas BLAKE3). Dépendance explicite, locale à ce crate.
-sha2 = "0.10"
+sha2 = "0.11"
 
 [lints]
 workspace = true
