@@ -184,6 +184,103 @@ pub struct ArtifactRef {
     pub collected_at: Timestamp,
 }
 
+/// Verdict et couverture d'une assertion, tels que repris dans la table de
+/// correspondance : le même verdict que la section des exigences, jamais
+/// recalculé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssertionOutcome {
+    /// Identifiant de l'assertion (ex. `"SSH-ROOT"`).
+    pub assertion_id: String,
+    /// Titre lisible de l'assertion.
+    pub title: String,
+    pub verdict: Verdict,
+    pub coverage: CoverageSummary,
+}
+
+/// Verdict agrégé d'une exigence du référentiel. Distinct de [`Verdict`] :
+/// une exigence sans aucune assertion mappée est **non couverte** — un état
+/// déclaré, jamais passé sous silence, et jamais confondu avec « indéterminé
+/// faute de couverture de collecte ».
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequirementVerdict {
+    /// Toutes les assertions qui la couvrent sont conformes.
+    Pass,
+    /// Au moins une assertion non conforme.
+    Fail,
+    /// Aucune non conforme, mais au moins une indéterminée.
+    Undetermined,
+    /// Aucune assertion ne couvre cette exigence : rien ne peut être affirmé.
+    NotCovered,
+}
+
+impl RequirementVerdict {
+    /// Libellé français du verdict agrégé.
+    pub fn label(&self) -> &'static str {
+        match self {
+            RequirementVerdict::Pass => "Conforme",
+            RequirementVerdict::Fail => "Non conforme",
+            RequirementVerdict::Undetermined => "Indéterminé",
+            RequirementVerdict::NotCovered => "Non couverte",
+        }
+    }
+}
+
+/// Une exigence du référentiel dans la table de correspondance : son
+/// identifiant, son titre, et les assertions qui la couvrent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MappedRequirement {
+    /// Identifiant de l'exigence dans le référentiel (ex. `"EX-1"`).
+    pub id: String,
+    /// Titre de l'exigence, tel qu'énoncé par le référentiel.
+    pub title: String,
+    /// Les assertions mappées sur cette exigence, avec leur verdict — vide
+    /// si l'exigence n'est couverte par aucune assertion.
+    pub assertions: Vec<AssertionOutcome>,
+}
+
+impl MappedRequirement {
+    /// Verdict agrégé : `Fail` si une assertion échoue, sinon `Undetermined`
+    /// si une est indéterminée, sinon `Pass` — et `NotCovered` si aucune
+    /// assertion n'est mappée.
+    pub fn verdict(&self) -> RequirementVerdict {
+        if self.assertions.is_empty() {
+            return RequirementVerdict::NotCovered;
+        }
+        if self.assertions.iter().any(|a| a.verdict == Verdict::Fail) {
+            return RequirementVerdict::Fail;
+        }
+        if self
+            .assertions
+            .iter()
+            .any(|a| a.verdict == Verdict::Undetermined)
+        {
+            return RequirementVerdict::Undetermined;
+        }
+        RequirementVerdict::Pass
+    }
+}
+
+/// Table de correspondance par référentiel (§10.2.3) : par exigence, les
+/// assertions qui la couvrent et le verdict agrégé ; en annexe, les
+/// assertions évaluées qu'aucune exigence ne référence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorrespondenceTable {
+    /// Identifiant du référentiel (ex. `"exemple"`).
+    pub referential_id: String,
+    /// Titre du référentiel.
+    pub referential_title: String,
+    /// Version du référentiel (ex. `"v1"`).
+    pub referential_version: String,
+    /// Les exigences, dans l'ordre du fichier de référentiel.
+    pub requirements: Vec<MappedRequirement>,
+    /// Annexe : assertions évaluées non rattachées à une exigence.
+    pub unmapped_assertions: Vec<AssertionOutcome>,
+    /// Avertissements de construction (ex. une exigence référence une
+    /// assertion absente du fichier d'assertions) — listés, jamais tus.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
 /// Bloc de preuve (§10.2.6) : ce qui rend le dossier vérifiable sans Constat.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofBlock {
@@ -207,6 +304,11 @@ pub struct EvidenceDossier {
     pub cover: Cover,
     pub inventory: Inventory,
     pub requirements: Vec<RequirementReport>,
+    /// Table de correspondance par référentiel, si un référentiel a été
+    /// fourni (`constat pack --referential`). Champ optionnel et `default` :
+    /// un dossier sérialisé avant son introduction se relit tel quel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correspondence: Option<CorrespondenceTable>,
     pub outages: Vec<Outage>,
     pub artifacts: Vec<ArtifactRef>,
     pub proof: ProofBlock,

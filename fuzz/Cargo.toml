@@ -1,0 +1,61 @@
+[package]
+name = "constat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde = "1"
+constat-model = { path = "../crates/constat-model" }
+constat-policy = { path = "../crates/constat-policy" }
+constat-collect = { path = "../crates/constat-collect" }
+constat-store = { path = "../crates/constat-store" }
+constat-verify = { path = "../crates/constat-verify" }
+
+[[bin]]
+name = "fuzz_sshd_extract"
+path = "fuzz_targets/fuzz_sshd_extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_redact"
+path = "fuzz_targets/fuzz_redact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_policy_yaml"
+path = "fuzz_targets/fuzz_policy_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_canonical_roundtrip"
+path = "fuzz_targets/fuzz_canonical_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_verify_entry"
+path = "fuzz_targets/fuzz_verify_entry.rs"
+test = false
+doc = false
+bench = false
+
+# Hors workspace, délibérément (§8) : le fuzzing exige la chaîne nightly
+# (cargo-fuzz) alors que le workspace vise Rust stable ≥ 1.85. Cette table
+# vide fait de fuzz/ un workspace indépendant.
+[workspace]
+
+[profile.release]
+debug = 1

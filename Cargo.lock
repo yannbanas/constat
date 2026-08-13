@@ -281,7 +281,7 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "constat-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "constat-collect",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "constat-anchor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "constat-model",
  "ed25519-dalek",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "constat-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "clap",
@@ -321,13 +321,18 @@ dependencies = [
  "constat-time",
  "constat-verify",
  "miette",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
  "serde",
+ "serde_yaml",
  "thiserror",
+ "webpki-roots",
 ]
 
 [[package]]
 name = "constat-collect"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "constat-model",
@@ -335,11 +340,12 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "constat-diff"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "constat-model",
  "proptest",
@@ -348,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "constat-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "ciborium",
@@ -360,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "constat-policy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "constat-model",
  "constat-time",
@@ -373,8 +379,9 @@ dependencies = [
 
 [[package]]
 name = "constat-report"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "ciborium",
  "constat-model",
  "insta",
  "serde",
@@ -383,12 +390,13 @@ dependencies = [
 
 [[package]]
 name = "constat-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "constat-agent",
  "constat-model",
  "constat-store",
+ "hex",
  "miette",
  "rcgen",
  "rustls",
@@ -399,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "constat-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "constat-model",
@@ -416,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "constat-time"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "constat-model",
  "proptest",
@@ -426,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "constat-verify"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "constat-model",
  "constat-store",
@@ -1415,6 +1423,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1425,6 +1442,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]

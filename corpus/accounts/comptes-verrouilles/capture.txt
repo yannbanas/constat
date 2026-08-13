@@ -1,0 +1,20 @@
+### constat:fichier /etc/passwd
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+mfournier:x:1000:1000:M. Fournier:/home/mfournier:/bin/bash
+svc-sauvegarde:x:998:998:service de sauvegarde:/var/lib/sauvegarde:/usr/sbin/nologin
+ancien-admin:x:1001:1001:compte a supprimer:/home/ancien-admin:/bin/bash
+### constat:fichier /etc/group
+root:x:0:
+daemon:x:1:
+sudo:x:27:mfournier,ancien-admin
+users:x:100:mfournier
+mfournier:x:1000:
+svc-sauvegarde:x:998:
+ancien-admin:x:1001:
+### constat:fichier /etc/shadow
+root:*:19000:0:99999:7:::
+daemon:*:18474:0:99999:7:::
+mfournier:$y$[EXPURGÉ:hachage]:20390:0:365:14:::
+svc-sauvegarde:!$6$[EXPURGÉ:hachage]:19700:0:99999:7:::
+ancien-admin:!$6$[EXPURGÉ:hachage]:19500:0:99999:7:::

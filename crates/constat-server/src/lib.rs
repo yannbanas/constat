@@ -17,5 +17,6 @@
 //! - le serveur ne connaît des agents que leur certificat client et leur clé
 //!   publique de signature.
 
+pub mod inventory;
 pub mod receive;
 pub mod serve;

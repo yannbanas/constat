@@ -1,0 +1,54 @@
+# Faits attendus pour corpus/sshd/blocs-match/capture.txt
+#
+# Deux pièges classiques d'un sshd_config réel :
+#
+# 1. Directives DUPLIQUÉES : la sémantique OpenSSH est « première occurrence
+#    gagnante ». Le second `PermitRootLogin yes` est sans effet — remonter
+#    « yes » serait un verdict faux.
+# 2. Blocs `Match` : leurs directives sont CONDITIONNELLES. Elles ne sont
+#    jamais remontées comme faits globaux — les remonter serait mentir sur
+#    l'état effectif hors condition. Conséquence : `X11Forwarding` et
+#    `AllowTcpForwarding`, présents UNIQUEMENT dans un bloc Match, sont
+#    `Absent` au niveau global.
+
+collector: sshd
+case: blocs-match
+
+facts:
+  - entity: "service:sshd"
+    attribute: "sshd.Port"
+    value: { list: [{ int: 22 }, { int: 2222 }] }
+
+  # première occurrence gagnante : "no", pas le "yes" dupliqué plus bas,
+  # ni le "prohibit-password" du bloc Match
+  - entity: "service:sshd"
+    attribute: "sshd.PermitRootLogin"
+    value: { text: "no" }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PasswordAuthentication"
+    value: { bool: false }
+
+  - entity: "service:sshd"
+    attribute: "sshd.PubkeyAuthentication"
+    value: { bool: true }
+
+  # première occurrence gagnante : 3, pas le 6 du bloc Match
+  - entity: "service:sshd"
+    attribute: "sshd.MaxAuthTries"
+    value: { int: 3 }
+
+  # présents UNIQUEMENT dans un bloc Match : conditionnels, donc Absent au
+  # niveau global — même si la valeur conditionnelle est « no »
+  - entity: "service:sshd"
+    attribute: "sshd.X11Forwarding"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.AllowTcpForwarding"
+    value: { absent: true }
+
+  # jamais mentionnée dans le fichier : le défaut du système s'applique
+  - entity: "service:sshd"
+    attribute: "sshd.PermitEmptyPasswords"
+    value: { absent: true }

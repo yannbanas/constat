@@ -1,0 +1,97 @@
+# Faits attendus pour corpus/kernel_params/partiel/capture.txt
+#
+# Un dump sysctl PARTIEL est l'état normal, pas l'exception : IPv6 désactivé
+# au démarrage fait disparaître toutes les clés net.ipv6.*, un module non
+# chargé (Yama) fait disparaître la sienne. Pour chaque clé de la liste
+# blanche, un fait est produit MÊME quand la clé manque : `Absent` — qui ne
+# doit être confondu ni avec 0 ni avec un défaut inventé. « La clé n'existe
+# pas » est une information de conformité en soi (IPv6 coupé ≠ IPv6 non
+# durci). Les clés hors liste blanche (vm.swappiness, net.core.somaxconn)
+# ne produisent RIEN.
+
+collector: kernel_params
+case: partiel
+
+facts:
+  # --- présentes dans le dump
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.ip_forward"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.all.rp_filter"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.default.rp_filter"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.all.accept_source_route"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.default.accept_source_route"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.all.accept_redirects"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.default.accept_redirects"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.all.send_redirects"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.conf.all.log_martians"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.icmp_echo_ignore_broadcasts"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv4.tcp_syncookies"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.kptr_restrict"
+    value: { int: 2 }
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.dmesg_restrict"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.sysrq"
+    value: { int: 176 }
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.randomize_va_space"
+    value: { int: 2 }
+  - entity: "host:kernel"
+    attribute: "sysctl.vm.mmap_min_addr"
+    value: { int: 65536 }
+  - entity: "host:kernel"
+    attribute: "sysctl.fs.suid_dumpable"
+    value: { int: 0 }
+  - entity: "host:kernel"
+    attribute: "sysctl.fs.protected_symlinks"
+    value: { int: 1 }
+  - entity: "host:kernel"
+    attribute: "sysctl.fs.protected_hardlinks"
+    value: { int: 1 }
+
+  # --- absentes du dump : IPv6 désactivé au démarrage → les clés n'existent
+  # pas. Absent, pas 0 : « IPv6 coupé » et « IPv6 non durci » sont deux
+  # constats différents.
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv6.conf.all.accept_ra"
+    value: { absent: true }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv6.conf.all.accept_redirects"
+    value: { absent: true }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv6.conf.all.forwarding"
+    value: { absent: true }
+  - entity: "host:kernel"
+    attribute: "sysctl.net.ipv6.conf.all.disable_ipv6"
+    value: { absent: true }
+
+  # --- absentes : module Yama non chargé, noyau sans l'option BPF
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.yama.ptrace_scope"
+    value: { absent: true }
+  - entity: "host:kernel"
+    attribute: "sysctl.kernel.unprivileged_bpf_disabled"
+    value: { absent: true }

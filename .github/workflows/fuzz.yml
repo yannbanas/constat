@@ -1,0 +1,49 @@
+# Fuzzing court et régulier (CONSTAT-ARCHITECTURE.md §12 : les configurations
+# sont des entrées non fiables). Chaque cible tourne 60 secondes : ce n'est pas
+# une campagne, c'est un filet — un échec ici est une VRAIE trouvaille
+# (panique, débordement, croissance super-linéaire) et doit donner lieu à un
+# bogue puis à un cas de corpus (corpus/README.md, règle 4).
+#
+# Le répertoire fuzz/ est un workspace indépendant (nightly requis) ; ce job
+# n'affecte pas la CI stable.
+
+name: Fuzz
+
+on:
+  schedule:
+    # chaque lundi à 06h17 UTC (heure décalée : éviter la congestion de l'heure pile)
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: cargo-fuzz (60 s par cible)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Installer cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzzer chaque cible 60 secondes
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            echo "::group::${target}"
+            cargo +nightly fuzz run "${target}" -- -max_total_time=60 -timeout=25 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+      - name: Publier les entrées fautives (si trouvaille)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

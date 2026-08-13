@@ -1,0 +1,35 @@
+# capture windows.accounts anonymisée (poste Windows 11 autonome)
+[localgroup S-1-5-32-544]
+name = Administrateurs
+
+[localgroup S-1-5-32-545]
+name = Utilisateurs
+
+[localgroup S-1-5-32-555]
+name = Utilisateurs du Bureau à distance
+
+[user S-1-5-21-1004336348-1177238915-682003330-500]
+name = Administrateur
+enabled = false
+password_never_expires = true
+groups = S-1-5-32-544
+
+[user S-1-5-21-1004336348-1177238915-682003330-501]
+name = Invité
+enabled = false
+password_never_expires = true
+groups =
+
+[user S-1-5-21-1004336348-1177238915-682003330-1001]
+name = jdupont
+enabled = true
+password_never_expires = false
+last_logon = 1786344900000
+groups = S-1-5-32-544,S-1-5-32-545
+
+[user S-1-5-21-1004336348-1177238915-682003330-1002]
+name = mmartin
+enabled = true
+password_never_expires = true
+last_logon = 1754809140000
+groups = S-1-5-32-545,S-1-5-32-555

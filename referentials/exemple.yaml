@@ -1,0 +1,31 @@
+# Exemple de référentiel pour la table de correspondance du dossier de
+# preuve (§10.2, point 3).
+#
+# Usage :
+#   constat pack --period 2026-Q1 --referential exemple --out dossier.html
+#   (nom court résolu en referentials/<nom>.yaml, ou chemin de fichier direct)
+#
+# Format :
+#   referential:  identité du référentiel (id, title, version)
+#   requirements: exigences, chacune mappée sur les assertions
+#                 d'assertions.yaml qui la couvrent. Une exigence sans
+#                 assertion mappée sera déclarée « non couverte » dans le
+#                 dossier — jamais passée sous silence.
+
+referential:
+  id: exemple
+  title: Référentiel d'hygiène — exemple
+  version: v1
+
+requirements:
+  - id: EX-1
+    title: L'accès administrateur à distance aux serveurs est maîtrisé
+    assertions: [SSH-ROOT]
+
+  - id: EX-2
+    title: Tout compte privilégié exige une authentification forte
+    assertions: [ADM-MFA]
+
+  - id: EX-3
+    title: Les données sont sauvegardées et la sauvegarde est prouvée sous 24 heures
+    assertions: [BKP-24H]

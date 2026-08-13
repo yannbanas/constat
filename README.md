@@ -2,6 +2,7 @@
 
 [![Licence : Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/yannbanas/constat/actions/workflows/ci.yml/badge.svg)](https://github.com/yannbanas/constat/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/yannbanas/constat)](https://github.com/yannbanas/constat/releases/latest)
 
 **Constat enregistre l'état de configuration d'une infrastructure dans la durée, de façon non falsifiable, et produit la preuve qu'un auditeur accepte.**
 
@@ -55,26 +56,58 @@ Trois lignes, et elles répondent à une question à laquelle aucune organisatio
 
 ---
 
-## Démarrage rapide
+## Installation
 
-### Compiler depuis les sources
+### Binaires (version 0.1.0)
+
+Archives pour Linux (x86_64, aarch64) et Windows (x86_64) sur la
+[page de release](https://github.com/yannbanas/constat/releases/latest),
+empreintes SHA-256 jointes. Chaque archive contient les quatre binaires :
+`constat`, `constat-agent`, `constat-server` et `constat-verify`.
+
+```bash
+curl -LO https://github.com/yannbanas/constat/releases/download/v0.1.0/constat-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/yannbanas/constat/releases/download/v0.1.0/constat-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c constat-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf constat-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+```
+
+### Image conteneur (serveur)
+
+```bash
+docker pull ghcr.io/yannbanas/constat:0.1.0
+# ou la dernière version publiée :
+docker pull ghcr.io/yannbanas/constat:latest
+```
+
+### Depuis les sources
 
 ```bash
 git clone https://github.com/yannbanas/constat
 cd constat
-cargo build --release --workspace
+cargo build --release --locked
 ```
 
-Les binaires sont produits dans `target/release/`.
+Rust ≥ 1.85 ; les binaires sont produits dans `target/release/`.
+
+---
+
+## Démarrage rapide
 
 ### Première collecte
 
 ```bash
+# la clé de signature du journal, une fois par machine
+constat-agent keygen
+
 # une collecte unique, en local, sans serveur
 constat-agent run --once
+
+# ou en boucle planifiée (gigue ±10 % ; un échec de cycle n'arrête pas la boucle)
+constat-agent run --every 6h
 ```
 
-L'agent lit les configurations de la machine (lecture seule), expurge les secrets **avant** toute émission, extrait les faits et les enregistre dans le magasin adressé par contenu.
+L'agent lit les configurations de la machine (lecture seule), expurge les secrets **avant** toute émission, extrait les faits, les enregistre dans le magasin adressé par contenu (`./constat.redb` par défaut, ou `--store`/`CONSTAT_STORE`) et signe l'entrée de journal.
 
 ### Première évaluation
 
@@ -85,6 +118,49 @@ constat check --period 2026-Q1 --explain
 ```
 
 Chaque verdict est accompagné de sa **couverture** : la part de la période réellement observée, l'écart maximal entre deux collectes et les interruptions, déclarées explicitement. Un verdict sans couverture n'est pas une preuve.
+
+### Interroger, prouver, vérifier
+
+```bash
+constat state    --asset srv-fic-01 --at 2026-03-03T14:00
+constat diff     --asset srv-fic-01 --from 2026-03-01 --to 2026-03-31
+constat history  --entity "user:jdupont" --attr "user.privileged"
+constat timeline --assertion SSH-ROOT --period 2026-Q1
+
+constat pack     --period 2026-Q1 --out dossier-Q1.html   # le dossier de preuve
+constat anchor   --export racine.json                     # ancrage hors du système (§6.3)
+constat export   --out ./export                           # clôture vérifiable par un tiers
+constat-verify   ./export                                 # …sans faire confiance à Constat
+```
+
+---
+
+## Les collecteurs
+
+Ceux effectivement compilés dans l'agent aujourd'hui (registre
+`all_collectors()` de `constat-collect`) — lecture seule, aucune commande
+exécutée, expurgation à la source :
+
+| Collecteur | Ce qu'il lit | Faits produits (exemples) |
+|---|---|---|
+| `linux.accounts` | `/etc/passwd`, `/etc/group`, `/etc/shadow` (expurgé structurellement) | `user.privileged`, `user.groups`, `user.password.locked`, algorithme de hachage — jamais l'empreinte |
+| `backup.proof` | `/var/lib/constat/backup-status` (format texte documenté) | `backup.last_success`, rétention effective, date du dernier test de restauration |
+| `linux.sshd` | `/etc/ssh/sshd_config` | `sshd.PermitRootLogin`, `sshd.PasswordAuthentication`… (`Absent` si la directive manque) |
+| `linux.sudoers` | `/etc/sudoers` | `sudo.rules`, `sudo.all_commands`, `sudo.nopasswd` |
+| `linux.packages` | `/var/lib/dpkg/status`, sinon `/var/lib/constat/packages` | `pkg.version`, `pkg.status` (dont `half-configured`) |
+| `linux.ports` | `/proc/net/tcp`, `tcp6`, `udp` | ports en écoute |
+| `linux.systemd` | répertoires d'unités, liens `*.wants/` | `service.enabled`, `service.user`, `service.exec_start` |
+| `linux.kernel_params` | `/proc/sys/…` (liste blanche documentée) | `sysctl.*` de durcissement (CIS, ANSSI), `Absent` si la clé n'existe pas |
+
+| `windows.accounts` | API Win32 (NetUserEnum, groupes locaux) | `user.sid`, `user.enabled`, `user.groups`, `user.privileged` (par SID `S-1-5-32-544`), `user.password.never_expires` |
+| `windows.password_policy` | API Win32 (NetUserModalsGet) | `policy.min_password_length`, `policy.lockout_threshold`, … |
+| `windows.services` | registre `HKLM\...\Services` (lecture seule) | `service.start_mode`, `service.account`, `service.image_path` (expurgé) |
+| `ad.groups` | API Net vers le contrôleur de domaine (sans LDAP) | `group.members`, `user.privileged` (RID 512/519 par SID) |
+| `ad.gpo_security` | `GptTmpl.inf` du SYSVOL (UTF-16LE, parseur pur) | `gpo.<clé>`, `gpo.privilege.<privilège>` |
+
+Chaque collecteur ne tourne que sur sa plateforme et se déclare
+« indisponible » ailleurs, avec le motif — jamais de données simulées.
+Hors domaine, `ad.*` le dit et n'invente rien.
 
 ---
 
@@ -145,8 +221,10 @@ Le vérificateur mérite une mention : **la vérification doit être possible sa
 ## Documentation
 
 - [CONSTAT-ARCHITECTURE.md](CONSTAT-ARCHITECTURE.md) — la spécification complète
+- [CHANGELOG.md](CHANGELOG.md) — le journal des modifications
 - [docs/adr/](docs/adr/) — les décisions d'architecture (ADR)
 - [corpus/](corpus/) — captures réelles anonymisées et verdicts attendus
+- [fuzz/](fuzz/) — cibles de fuzzing (les configurations sont des entrées non fiables)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — conventions et processus de contribution
 - [SECURITY.md](SECURITY.md) — divulgation responsable des vulnérabilités
 

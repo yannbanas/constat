@@ -22,13 +22,29 @@ constat-anchor = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 thiserror = { workspace = true }
+serde = { workspace = true }
+# Table de correspondance par référentiel (§10.2.3) : même format YAML que
+# les assertions du §5.2.
+serde_yaml = { workspace = true }
+# Client HTTPS de `constat anchor --send` : rustls synchrone sur
+# std::net::TcpStream, même profil que l'agent et le serveur (fournisseur
+# ring fixé explicitement, pas d'exécuteur asynchrone).
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
+rustls-pki-types = { version = "1.10", features = ["std"] }
+# Racines de confiance Mozilla, embarquées : les prestataires d'horodatage
+# publics présentent des certificats publics — aucun magasin système à lire,
+# comportement identique sur toutes les plateformes. Version explicite :
+# ce paquet n'est que des données (ancres X.509), aucune exécution réseau.
+webpki-roots = "1.0"
 
 [dev-dependencies]
 # Tests uniquement : revérification complète d'un export (constat-verify est
 # le vérificateur autonome du §10.3) et relecture des fichiers CBOR canoniques.
 constat-verify = { workspace = true }
 ciborium = { workspace = true }
-serde = { workspace = true }
+# Serveur TLS local des tests HTTPS : certificat auto-signé fabriqué par
+# rcgen, racine injectée côté client — aucun réseau externe dans les tests.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 
 [lints]
 workspace = true

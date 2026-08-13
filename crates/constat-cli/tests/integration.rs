@@ -421,11 +421,47 @@ fn anchor_send_refuse_sort_en_erreur_avec_le_motif() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `--send https://…` négocie un vrai TLS, et vérifie le certificat contre
+/// les racines publiques embarquées : un serveur local auto-signé est
+/// refusé — pas de TLS approximatif — et aucun jeton n'est archivé.
+/// (Le bout-en-bout https avec racine injectée est testé dans `http.rs`.)
 #[test]
-fn anchor_send_https_est_honnetement_refuse() {
+fn anchor_send_https_refuse_un_certificat_hors_racines_publiques() {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    use std::sync::Arc;
+
     let (store, _) = scenario();
     let dir = tmp_dir("anchor-https");
     let store_path = dir.join("constat.redb");
+
+    // Serveur TLS local avec un certificat auto-signé (inconnu des racines
+    // Mozilla), qui n'attend qu'une poignée de main.
+    let certified =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("certificat");
+    let cert_der: CertificateDer<'static> = certified.cert.der().clone();
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("protocoles TLS")
+    .with_no_client_auth()
+    .with_single_cert(vec![cert_der], key)
+    .expect("configuration serveur");
+    let config = Arc::new(config);
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!(
+        "https://localhost:{}/tsa",
+        listener.local_addr().expect("addr").port()
+    );
+    let server = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().expect("accept");
+        let mut conn = rustls::ServerConnection::new(config).expect("connexion serveur");
+        // La poignée de main doit échouer : le client refuse le certificat.
+        conn.complete_io(&mut sock).expect_err("client méfiant")
+    });
+
     let err = commands::cmd_anchor(
         &store,
         &commands::AnchorArgs {
@@ -433,17 +469,148 @@ fn anchor_send_https_est_honnetement_refuse() {
             export_out: None,
             keys: None,
             organization: None,
-            send: Some("https://tsa.exemple.fr/tsr"),
+            send: Some(&url),
             store_path: Some(&store_path),
         },
     )
-    .expect_err("https non pris en charge");
-    assert!(err.to_string().contains("pas pris en charge"));
+    .expect_err("certificat auto-signé refusé par les racines publiques");
+    assert!(err.to_string().contains("impossible"), "erreur : {err}");
+    server.join().expect("serveur de test");
+
+    // Aucun jeton archivé après un refus TLS.
+    let root = store.root().expect("racine").expect("journal non vide");
+    assert!(!anchors::token_path(&store_path, &root).exists());
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------
-// 3. Assertion::scope, jusqu'au rendu de `constat check`
+// 4. constat pack --referential : la table de correspondance (§10.2.3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pack_avec_referentiel_rend_la_table_et_liste_les_avertissements() {
+    let (store, _) = scenario();
+    let dir = tmp_dir("pack-referentiel");
+
+    let assertions_path = dir.join("assertions.yaml");
+    std::fs::write(
+        &assertions_path,
+        "assertions:\n\
+         \x20 - id: ADM-AUCUN\n\
+         \x20   title: aucun compte privilégié\n\
+         \x20   predicate:\n\
+         \x20     never: { entity: \"user:*\", attr: \"user.privileged\", equals: true }\n\
+         \x20 - id: HORS-REF\n\
+         \x20   title: assertion hors référentiel\n\
+         \x20   predicate:\n\
+         \x20     always: { entity: \"user:*\", attr: \"user.privileged\", equals: true }\n",
+    )
+    .expect("écriture assertions");
+
+    // Un référentiel : une exigence couverte, une référence inconnue
+    // (avertissement, pas un crash), une exigence non couverte.
+    let referential_path = dir.join("mon-ref.yaml");
+    std::fs::write(
+        &referential_path,
+        "referential:\n\
+         \x20 id: essai\n\
+         \x20 title: Référentiel d'essai\n\
+         \x20 version: v9\n\
+         requirements:\n\
+         \x20 - id: R-1\n\
+         \x20   title: comptes maîtrisés\n\
+         \x20   assertions: [ADM-AUCUN, ASSERTION-FANTOME]\n\
+         \x20 - id: R-2\n\
+         \x20   title: exigence sans assertion\n",
+    )
+    .expect("écriture référentiel");
+
+    let dossier_path = dir.join("dossier.html");
+    let msg = commands::cmd_pack(
+        &store,
+        &commands::PackArgs {
+            assertions_path: &assertions_path,
+            period: "2026-01",
+            out: &dossier_path,
+            referential: Some(referential_path.to_str().expect("chemin UTF-8")),
+            organization: Some("Exemple SARL"),
+            inventory: None,
+            pubkey: None,
+            keys: None,
+            store_path: None,
+        },
+    )
+    .expect("pack --referential");
+
+    // La sortie résume la table et LISTE l'avertissement.
+    assert!(msg.contains("Table de correspondance"), "sortie : {msg}");
+    assert!(msg.contains("1 non couverte"), "sortie : {msg}");
+    assert!(msg.contains("ASSERTION-FANTOME"), "sortie : {msg}");
+
+    let html = std::fs::read_to_string(&dossier_path).expect("dossier lisible");
+    // La couverture porte l'identité du référentiel chargé.
+    assert!(
+        html.contains("Référentiel d&#39;essai v9 (essai)"),
+        "{html}"
+    );
+    // La table : exigence couverte (verdict de l'évaluation existante :
+    // ADM-AUCUN est violée par le scénario → Fail agrégé sur R-1).
+    assert!(html.contains("Table de correspondance"));
+    assert!(html.contains("R-1"));
+    assert!(html.contains("Non conforme"));
+    // Exigence non couverte : déclarée, jamais passée sous silence.
+    assert!(html.contains("R-2"));
+    assert!(html.contains("Non couverte"));
+    // Avertissement dans le dossier aussi.
+    assert!(html.contains("ASSERTION-FANTOME"));
+    // Annexe : l'assertion évaluée que le référentiel ne référence pas.
+    assert!(html.contains("HORS-REF"));
+
+    // Un référentiel introuvable est une erreur AVANT toute écriture.
+    let err = commands::cmd_pack(
+        &store,
+        &commands::PackArgs {
+            assertions_path: &assertions_path,
+            period: "2026-01",
+            out: &dir.join("jamais-ecrit.html"),
+            referential: Some("introuvable"),
+            organization: None,
+            inventory: None,
+            pubkey: None,
+            keys: None,
+            store_path: None,
+        },
+    )
+    .expect_err("référentiel introuvable");
+    assert!(err.to_string().contains("introuvable"), "erreur : {err}");
+    assert!(!dir.join("jamais-ecrit.html").exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// 5. constat verify : un rappel, pas une réimplémentation (§10.3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verify_pointe_vers_le_binaire_autonome_sans_reimplementer() {
+    let out = commands::cmd_verify(Some(Path::new("./export")));
+    // Le rappel de principe : la vérification ne dépend pas de Constat.
+    assert!(out.contains("binaire séparé"), "sortie : {out}");
+    assert!(out.contains("§10.3"), "sortie : {out}");
+    // La commande à lancer, avec le répertoire demandé.
+    assert!(out.contains("constat-verify"), "sortie : {out}");
+    assert!(out.contains("export"), "sortie : {out}");
+    assert!(out.contains("FORMAT.md"), "sortie : {out}");
+
+    // Sans argument : un gabarit lisible.
+    let out = commands::cmd_verify(None);
+    assert!(out.contains("<répertoire-export>"), "sortie : {out}");
+}
+
+// ---------------------------------------------------------------------------
+// 6. Assertion::scope, jusqu'au rendu de `constat check`
 // ---------------------------------------------------------------------------
 
 #[test]

@@ -1,0 +1,35 @@
+Package: openssh-server
+Status: install ok installed
+Priority: optional
+Section: net
+Installed-Size: 1804
+Maintainer: Debian OpenSSH Maintainers <debian-ssh@lists.debian.org>
+Architecture: amd64
+Version: 1:9.2p1-2+deb12u3
+Depends: adduser, libpam-modules, libpam-runtime, openssh-client
+Description: secure shell (SSH) server, for secure access from remote machines
+ This package provides the sshd server.
+ .
+ Continuation lines are indented and must not be parsed as fields.
+
+Package: libexemple3
+Status: install ok half-configured
+Priority: important
+Section: libs
+Architecture: amd64
+Version: 3.0.13-1+deb12u1
+Description: bibliothèque dont le postinst a échoué en cours de mise à jour
+ Un paquet « half-configured » est dépaqueté mais sa configuration a échoué :
+ il n'est PAS installé au sens de la conformité.
+
+Package: outil-retire
+Status: deinstall ok config-files
+Priority: optional
+Section: admin
+Architecture: all
+Version: 1.4-2
+Description: paquet supprimé dont les fichiers de configuration restent
+
+Package: ancienne-lib
+Status: purge ok not-installed
+Priority: optional

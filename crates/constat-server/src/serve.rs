@@ -29,13 +29,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use constat_model::{from_canonical_bytes, to_canonical_bytes};
-use constat_store::Store;
+use constat_store::MultiJournalStore;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::RootCertStore;
 
-use crate::receive::{PushBatch, ReceiveError, Receiver, StoreReceiver};
+use crate::receive::{AgentPolicy, PushBatch, ReceiveError, Receiver, StoreReceiver};
 
 /// Chemin HTTP de la poussée — miroir exact de `constat-agent`.
 pub const PUSH_PATH: &str = "/v1/pousse";
@@ -51,8 +51,10 @@ const MAX_HEAD_BYTES: usize = 16 * 1024;
 /// retient pas un thread indéfiniment.
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Le magasin partagé entre les threads de connexion.
-pub type SharedStore = Arc<Mutex<dyn Store + Send>>;
+/// Le magasin partagé entre les threads de connexion. Multi-agents : le
+/// receveur range chaque poussée dans le journal nommé de la clé de l'agent
+/// ([`constat_store::MultiJournalStore`]).
+pub type SharedStore = Arc<Mutex<dyn MultiJournalStore + Send>>;
 
 /// Erreurs de démarrage et de configuration de l'écouteur.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
@@ -137,11 +139,18 @@ pub struct Server {
     listener: TcpListener,
     tls: Arc<rustls::ServerConfig>,
     store: SharedStore,
+    /// Politique d'autorisation des clés d'agents ([`AgentPolicy::Tofu`]
+    /// par défaut ; allowlist via [`Server::with_policy`]).
+    policy: Arc<AgentPolicy>,
 }
 
 impl Server {
     /// Lie l'adresse d'écoute. `127.0.0.1:0` est accepté (port libre choisi
     /// par le système — utile aux tests, [`Server::local_addr`] le révèle).
+    ///
+    /// La politique d'autorisation par défaut est [`AgentPolicy::Tofu`]
+    /// (premier-arrivé-enregistré) — voir [`Server::with_policy`] pour une
+    /// allowlist.
     pub fn bind(
         addr: &str,
         tls: Arc<rustls::ServerConfig>,
@@ -152,7 +161,17 @@ impl Server {
             listener,
             tls,
             store,
+            policy: Arc::new(AgentPolicy::Tofu),
         })
+    }
+
+    /// Remplace la politique d'autorisation des clés d'agents — typiquement
+    /// une [`AgentPolicy::Allowlist`] chargée depuis `--allowed-agents` :
+    /// clé absente = `403`, refusé avant toute écriture.
+    #[must_use]
+    pub fn with_policy(mut self, policy: AgentPolicy) -> Self {
+        self.policy = Arc::new(policy);
+        self
     }
 
     /// L'adresse effectivement liée.
@@ -169,7 +188,8 @@ impl Server {
                 Ok((sock, _peer)) => {
                     let tls = Arc::clone(&self.tls);
                     let store = Arc::clone(&self.store);
-                    std::thread::spawn(move || handle_connection(sock, tls, &store));
+                    let policy = Arc::clone(&self.policy);
+                    std::thread::spawn(move || handle_connection(sock, tls, &store, &policy));
                 }
                 Err(e) => eprintln!("constat-server : connexion non acceptée : {e}"),
             }
@@ -179,7 +199,12 @@ impl Server {
 
 /// Sert une connexion : poignée de main mTLS (implicite à la première
 /// lecture), une requête, une réponse, fermeture.
-fn handle_connection(sock: TcpStream, tls: Arc<rustls::ServerConfig>, store: &SharedStore) {
+fn handle_connection(
+    sock: TcpStream,
+    tls: Arc<rustls::ServerConfig>,
+    store: &SharedStore,
+    policy: &AgentPolicy,
+) {
     let _ = sock.set_read_timeout(Some(IO_TIMEOUT));
     let _ = sock.set_write_timeout(Some(IO_TIMEOUT));
     let conn = match rustls::ServerConnection::new(tls) {
@@ -189,7 +214,7 @@ fn handle_connection(sock: TcpStream, tls: Arc<rustls::ServerConfig>, store: &Sh
     let mut stream = rustls::StreamOwned::new(conn, sock);
 
     let response = match read_request(&mut stream) {
-        Ok(body) => process(&body, store),
+        Ok(body) => process(&body, store, policy),
         // Poignée de main refusée (pas de certificat client valide) ou
         // coupure : rien à répondre, on raccroche.
         Err(None) => {
@@ -320,7 +345,7 @@ fn read_request<S: Read>(stream: &mut S) -> Result<Vec<u8>, Option<Vec<u8>>> {
 }
 
 /// Décode le lot, le remet au [`StoreReceiver`], encode l'accusé.
-fn process(body: &[u8], store: &SharedStore) -> Vec<u8> {
+fn process(body: &[u8], store: &SharedStore, policy: &AgentPolicy) -> Vec<u8> {
     let batch: PushBatch = match from_canonical_bytes(body) {
         Ok(batch) => batch,
         Err(e) => {
@@ -337,9 +362,9 @@ fn process(body: &[u8], store: &SharedStore) -> Vec<u8> {
             );
         }
     };
-    let mut receiver = StoreReceiver::new(&mut *guard);
+    let mut receiver = StoreReceiver::with_policy(&mut *guard, policy.clone());
     match receiver.receive(batch) {
-        // L'accusé : des compteurs et une empreinte, rien d'exécutable (§17).
+        // L'accusé : des compteurs et des empreintes, rien d'exécutable (§17).
         Ok(receipt) => match to_canonical_bytes(&receipt) {
             Ok(bytes) => response(200, "OK", "application/cbor", &bytes),
             Err(e) => text_response(
@@ -348,6 +373,8 @@ fn process(body: &[u8], store: &SharedStore) -> Vec<u8> {
                 &format!("encodage de l'accusé : {e}"),
             ),
         },
+        // Clé absente de l'allowlist : refus avant toute écriture.
+        Err(e @ ReceiveError::Forbidden(_)) => text_response(403, "Forbidden", &e.to_string()),
         Err(ReceiveError::Store(e)) => {
             text_response(500, "Internal Server Error", &format!("magasin : {e}"))
         }

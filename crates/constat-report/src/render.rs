@@ -8,7 +8,7 @@
 //! - la procédure de vérification par `constat-verify` (§10.3).
 
 use crate::time_format::{format_duration, format_timestamp};
-use crate::{EvidenceDossier, ExceptionNote, Verdict};
+use crate::{CorrespondenceTable, EvidenceDossier, ExceptionNote, RequirementVerdict, Verdict};
 
 /// Rend le dossier en HTML autonome et imprimable. Déterministe : le même
 /// dossier produit exactement le même document.
@@ -124,8 +124,19 @@ pub fn render_html(dossier: &EvidenceDossier) -> String {
     }
     html.push_str("</section>\n");
 
+    // 3 bis. Table de correspondance par référentiel (optionnelle) ----------
+    // Les sections suivantes sont renumérotées quand elle est présente : un
+    // dossier sans référentiel rend exactement le même document qu'avant.
+    let shift = usize::from(dossier.correspondence.is_some());
+    if let Some(table) = &dossier.correspondence {
+        render_correspondence(&mut html, table);
+    }
+
     // 4. Interruptions -------------------------------------------------------
-    html.push_str("<section>\n<h2>3. Interruptions de collecte, déclarées</h2>\n");
+    html.push_str(&format!(
+        "<section>\n<h2>{}. Interruptions de collecte, déclarées</h2>\n",
+        3 + shift
+    ));
     if dossier.outages.is_empty() {
         html.push_str("<p>Aucune interruption de collecte sur la période.</p>\n");
     } else {
@@ -148,7 +159,10 @@ pub fn render_html(dossier: &EvidenceDossier) -> String {
     html.push_str("</section>\n");
 
     // 5. Annexe : artefacts ---------------------------------------------------
-    html.push_str("<section>\n<h2>4. Annexe : artefacts bruts et empreintes</h2>\n");
+    html.push_str(&format!(
+        "<section>\n<h2>{}. Annexe : artefacts bruts et empreintes</h2>\n",
+        4 + shift
+    ));
     if dossier.artifacts.is_empty() {
         html.push_str("<p>Aucun artefact référencé.</p>\n");
     } else {
@@ -172,9 +186,10 @@ pub fn render_html(dossier: &EvidenceDossier) -> String {
 
     // 6. Bloc de preuve --------------------------------------------------------
     let proof = &dossier.proof;
-    html.push_str(
-        "<section>\n<h2>5. Preuve et procédure de vérification</h2>\n<table class=\"meta\">\n",
-    );
+    html.push_str(&format!(
+        "<section>\n<h2>{}. Preuve et procédure de vérification</h2>\n<table class=\"meta\">\n",
+        5 + shift
+    ));
     push_row(
         &mut html,
         "Racine de Merkle",
@@ -231,8 +246,12 @@ pub fn render_html(dossier: &EvidenceDossier) -> String {
     );
 
     // 7. Ce que ce dossier ne prouve pas — TOUJOURS présent (§6.4) -------------
+    html.push_str(&format!(
+        "<section class=\"limits\">\n<h2>{}. Ce que ce dossier ne prouve pas</h2>\n",
+        6 + shift
+    ));
     html.push_str(
-        "<section class=\"limits\">\n<h2>6. Ce que ce dossier ne prouve pas</h2>\n\
+        "\
          <p>Un outil de preuve qui surestime ses garanties est pire qu'inutile. \
          Les limites suivantes font partie du dossier :</p>\n<ul>\n\
          <li><strong>Sans ancrage externe, le journal prouve la cohérence interne, pas \
@@ -255,6 +274,94 @@ pub fn render_html(dossier: &EvidenceDossier) -> String {
     html.push_str("<footer><p>Dossier généré par Constat. La preuve est vérifiable sans Constat.</p></footer>\n");
     html.push_str("</body>\n</html>\n");
     html
+}
+
+/// Rend la table de correspondance (§10.2.3) : par exigence du référentiel,
+/// les assertions qui la couvrent avec leur verdict et leur couverture, et le
+/// verdict agrégé. Une exigence sans assertion mappée est déclarée **non
+/// couverte** — jamais passée sous silence. Les assertions évaluées
+/// qu'aucune exigence ne référence sont listées en annexe.
+fn render_correspondence(html: &mut String, table: &CorrespondenceTable) {
+    let e = escape;
+    html.push_str(&format!(
+        "<section>\n<h2>3. Table de correspondance — {} {} (<code>{}</code>)</h2>\n",
+        e(&table.referential_title),
+        e(&table.referential_version),
+        e(&table.referential_id)
+    ));
+    html.push_str(
+        "<p>Par exigence du référentiel : les assertions qui la couvrent, leur verdict, \
+         et le verdict agrégé de l'exigence. <strong>Une exigence qu'aucune assertion \
+         ne couvre est déclarée non couverte</strong> : rien ne peut être affirmé à \
+         son sujet.</p>\n",
+    );
+
+    if !table.warnings.is_empty() {
+        html.push_str(
+            "<p class=\"alert\">Avertissements à la construction de la table :</p>\n<ul>\n",
+        );
+        for warning in &table.warnings {
+            html.push_str(&format!("<li class=\"alert\">{}</li>\n", e(warning)));
+        }
+        html.push_str("</ul>\n");
+    }
+
+    for req in &table.requirements {
+        let verdict = req.verdict();
+        let class = match verdict {
+            RequirementVerdict::Pass => "pass",
+            RequirementVerdict::Fail => "fail",
+            RequirementVerdict::Undetermined | RequirementVerdict::NotCovered => "undet",
+        };
+        html.push_str(&format!(
+            "<article class=\"req\">\n<h3><code>{}</code> — {}</h3>\n\
+             <p>Verdict agrégé : <strong class=\"{class}\">{}</strong></p>\n",
+            e(&req.id),
+            e(&req.title),
+            verdict.label()
+        ));
+        if req.assertions.is_empty() {
+            html.push_str(
+                "<p class=\"alert\">Exigence non couverte : aucune assertion ne lui est \
+                 rattachée — ce dossier ne prouve rien à son sujet.</p>\n",
+            );
+        } else {
+            html.push_str("<ul>\n");
+            for a in &req.assertions {
+                html.push_str(&render_outcome(a));
+            }
+            html.push_str("</ul>\n");
+        }
+        html.push_str("</article>\n");
+    }
+
+    html.push_str("<h3>Annexe : assertions évaluées non rattachées au référentiel</h3>\n");
+    if table.unmapped_assertions.is_empty() {
+        html.push_str("<p>Aucune : toutes les assertions évaluées couvrent une exigence.</p>\n");
+    } else {
+        html.push_str("<ul>\n");
+        for a in &table.unmapped_assertions {
+            html.push_str(&render_outcome(a));
+        }
+        html.push_str("</ul>\n");
+    }
+    html.push_str("</section>\n");
+}
+
+/// Une assertion dans la table : identifiant, titre, verdict, couverture.
+fn render_outcome(outcome: &crate::AssertionOutcome) -> String {
+    let class = match outcome.verdict {
+        Verdict::Pass => "pass",
+        Verdict::Fail => "fail",
+        Verdict::Undetermined => "undet",
+    };
+    format!(
+        "<li><code>{}</code> — {} : <strong class=\"{class}\">{}</strong>, couverture {}</li>\n",
+        escape(&outcome.assertion_id),
+        escape(&outcome.title),
+        outcome.verdict.label(),
+        permille(outcome.coverage.observed_permille)
+    )
 }
 
 /// Rend une exception, en signalant celles qui ont expiré à la date de

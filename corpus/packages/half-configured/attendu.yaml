@@ -1,0 +1,42 @@
+# Faits attendus pour corpus/packages/half-configured/capture.txt
+#
+# L'état dpkg est le TROISIÈME mot du champ `Status: <want> <flag> <status>` :
+# « install ok half-configured » signifie que le postinst a échoué — le paquet
+# n'est PAS installé au sens de la conformité, même si sa version figure dans
+# le fichier. Confondre « présent dans le fichier d'état » et « installé »
+# produit des verdicts faux sur les correctifs.
+
+collector: packages
+case: half-configured
+
+facts:
+  - entity: "pkg:openssh-server"
+    attribute: "pkg.version"
+    value: { text: "1:9.2p1-2+deb12u3" }
+  - entity: "pkg:openssh-server"
+    attribute: "pkg.status"
+    value: { text: "installed" }
+
+  # le piège : version présente, mais l'état réel est half-configured
+  - entity: "pkg:libexemple3"
+    attribute: "pkg.version"
+    value: { text: "3.0.13-1+deb12u1" }
+  - entity: "pkg:libexemple3"
+    attribute: "pkg.status"
+    value: { text: "half-configured" }
+
+  - entity: "pkg:outil-retire"
+    attribute: "pkg.version"
+    value: { text: "1.4-2" }
+  - entity: "pkg:outil-retire"
+    attribute: "pkg.status"
+    value: { text: "config-files" }
+
+  # paragraphe sans champ Version (paquet purgé) : la version est ABSENTE,
+  # pas une chaîne vide ni une valeur inventée
+  - entity: "pkg:ancienne-lib"
+    attribute: "pkg.version"
+    value: { absent: true }
+  - entity: "pkg:ancienne-lib"
+    attribute: "pkg.status"
+    value: { text: "not-installed" }

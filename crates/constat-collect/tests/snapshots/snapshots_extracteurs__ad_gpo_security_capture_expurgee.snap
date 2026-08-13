@@ -1,0 +1,30 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 163
+expression: redacted
+---
+### constat:fichier gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}
+[Unicode]
+Unicode=yes
+[System Access]
+MinimumPasswordAge = 1
+MaximumPasswordAge = 42
+MinimumPasswordLength = 12
+PasswordComplexity = 1
+PasswordHistorySize = 24
+LockoutBadCount = 5
+ResetLockoutCount = 30
+LockoutDuration = 30
+RequireLogonToChangePassword = 0
+ClearTextPassword = 0
+LSAAnonymousNameLookup = 0
+EnableGuestAccount = 0
+NewAdministratorName = "AdminExemple"
+[Privilege Rights]
+SeDebugPrivilege = *S-1-5-32-544
+SeRemoteInteractiveLogonRight = *S-1-5-32-544,*S-1-5-32-555
+SeDenyNetworkLogonRight = *S-1-5-32-546
+SeBackupPrivilege = *S-1-5-32-544,*S-1-5-32-551,EXEMPLE\svc-sauvegarde
+[Version]
+signature="$CHICAGO$"
+Revision=1

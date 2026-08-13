@@ -1,0 +1,24 @@
+# sshd_config d'un bastion : directives globales, puis blocs conditionnels.
+
+Port 22
+Port 2222
+
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+MaxAuthTries 3
+
+# doublon laissé par une édition manuelle : OpenSSH applique la PREMIÈRE
+# occurrence de chaque directive — les deux lignes ci-dessous sont sans effet
+PermitRootLogin yes
+PasswordAuthentication yes
+
+# comptes de transfert : assouplissements CONDITIONNELS, pas l'état global
+Match User transfert-fichiers
+    PasswordAuthentication yes
+    AllowTcpForwarding no
+    X11Forwarding no
+
+Match Address 192.0.2.0/24
+    PermitRootLogin prohibit-password
+    MaxAuthTries 6

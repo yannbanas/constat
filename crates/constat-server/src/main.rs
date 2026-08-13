@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
-use constat_server::serve;
+use constat_server::receive::AgentPolicy;
+use constat_server::{inventory, serve};
 use constat_store::RedbStore;
 use miette::miette;
 
@@ -58,7 +59,30 @@ enum Command {
         /// Chemin du magasin central (sinon CONSTAT_STORE, sinon ./constat.redb)
         #[arg(long, value_name = "CHEMIN")]
         store: Option<PathBuf>,
+        /// Liste des clés publiques d'agents autorisées : un fichier texte,
+        /// une clé Ed25519 en hexadécimal (64 caractères) par ligne,
+        /// commentaires avec #. Clé absente = poussée refusée (403) avant
+        /// toute écriture. Sans ce fichier : premier-arrivé-enregistré
+        /// (TOFU), chaque clé restant verrouillée sur son propre journal.
+        #[arg(long, value_name = "FICHIER")]
+        allowed_agents: Option<PathBuf>,
     },
+    /// Liste les journaux du magasin : clé d'agent abrégée, nombre
+    /// d'entrées, date de la dernière entrée, racine — l'inventaire
+    /// attendu/observé (§10.2) commence ici. Lecture seule.
+    Journals {
+        /// Chemin du magasin central (sinon CONSTAT_STORE, sinon ./constat.redb)
+        #[arg(long, value_name = "CHEMIN")]
+        store: Option<PathBuf>,
+    },
+}
+
+/// Résout le chemin du magasin : `--store`, sinon `CONSTAT_STORE`, sinon
+/// `./constat.redb`.
+fn resolve_store_path(store: Option<PathBuf>) -> PathBuf {
+    store
+        .or_else(|| std::env::var_os("CONSTAT_STORE").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("./constat.redb"))
 }
 
 /// Configuration validée du serveur.
@@ -101,9 +125,7 @@ fn validate(
             "adresse d'écoute invalide : « {listen} » (attendu : IP:port, ex. 0.0.0.0:8443)"
         ));
     }
-    let store = store
-        .or_else(|| std::env::var_os("CONSTAT_STORE").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("./constat.redb"));
+    let store = resolve_store_path(store);
     Ok(ServerConfig {
         listen,
         cert,
@@ -122,11 +144,19 @@ fn main() -> miette::Result<()> {
             key,
             client_ca,
             store,
+            allowed_agents,
         } => {
             let config = validate(listen, cert, key, client_ca, store)?;
 
             // mTLS d'abord : sans les trois fichiers valides, rien ne démarre.
             let tls = serve::load_tls(&config.cert, &config.key, &config.client_ca)?;
+
+            // Politique d'autorisation des clés d'agents : allowlist si le
+            // fichier est fourni (et lisible), TOFU sinon.
+            let policy = match &allowed_agents {
+                Some(path) => AgentPolicy::from_allowlist_file(path)?,
+                None => AgentPolicy::Tofu,
+            };
 
             let store = RedbStore::open(&config.store).map_err(|e| {
                 miette!(
@@ -136,19 +166,32 @@ fn main() -> miette::Result<()> {
             })?;
             let shared: serve::SharedStore = Arc::new(Mutex::new(store));
 
-            let server = serve::Server::bind(&config.listen, tls, shared)?;
+            let server = serve::Server::bind(&config.listen, tls, shared)?.with_policy(policy);
             let addr = server
                 .local_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| config.listen.clone());
+            let regime = match &allowed_agents {
+                Some(path) => format!("agents autorisés : {}", path.display()),
+                None => "TOFU (premier-arrivé-enregistré, une clé = un journal)".to_string(),
+            };
             eprintln!(
                 "constat-server en écoute sur {addr} — magasin {} — mTLS exigé \
-                 (autorité des agents : {}). Réception uniquement : ce serveur \
-                 n'initie jamais de connexion vers le parc (§17).",
+                 (autorité des agents : {}) — {regime}. Réception uniquement : \
+                 ce serveur n'initie jamais de connexion vers le parc (§17).",
                 config.store.display(),
                 config.client_ca.display()
             );
             server.run()
+        }
+        Command::Journals { store } => {
+            let path = resolve_store_path(store);
+            let store = RedbStore::open(&path)
+                .map_err(|e| miette!("impossible d'ouvrir le magasin {} : {e}", path.display()))?;
+            let rows = inventory::inventory(&store)
+                .map_err(|e| miette!("lecture des journaux de {} : {e}", path.display()))?;
+            print!("{}", inventory::render(&rows));
+            Ok(())
         }
     }
 }

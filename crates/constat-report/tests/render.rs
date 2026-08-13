@@ -5,8 +5,9 @@
 
 use constat_model::{AssetId, BlobHash, DurationMs, Timestamp};
 use constat_report::{
-    render_html, ArtifactRef, Cover, CoverageSummary, EvidenceDossier, ExceptionNote, Inventory,
-    Outage, ProofBlock, RequirementReport, Verdict,
+    render_html, ArtifactRef, AssertionOutcome, CorrespondenceTable, Cover, CoverageSummary,
+    EvidenceDossier, ExceptionNote, Inventory, MappedRequirement, Outage, ProofBlock,
+    RequirementReport, RequirementVerdict, Verdict,
 };
 
 /// Un dossier d'exemple complet et déterministe : Q1 2026, un écart
@@ -85,6 +86,7 @@ fn dossier_exemple() -> EvidenceDossier {
                 exceptions: vec![],
             },
         ],
+        correspondence: None,
         outages: vec![
             Outage {
                 asset: AssetId("srv-fic-02".to_owned()),
@@ -123,9 +125,146 @@ fn dossier_exemple() -> EvidenceDossier {
     }
 }
 
+/// Reprend le verdict d'une exigence de [`dossier_exemple`] sous la forme
+/// de la table de correspondance — les mêmes verdicts, jamais recalculés.
+fn outcome_of(req: &RequirementReport) -> AssertionOutcome {
+    AssertionOutcome {
+        assertion_id: req.assertion_id.clone(),
+        title: req.title.clone(),
+        verdict: req.verdict,
+        coverage: req.coverage,
+    }
+}
+
+/// Le dossier d'exemple, complété d'une table de correspondance : une
+/// exigence couverte en échec, une exigence conforme, une exigence **non
+/// couverte**, une assertion hors référentiel en annexe, un avertissement.
+fn dossier_avec_table() -> EvidenceDossier {
+    let mut dossier = dossier_exemple();
+    let ssh = outcome_of(&dossier.requirements[0]); // SSH-ROOT, Pass
+    let mfa = outcome_of(&dossier.requirements[1]); // ADM-MFA, Fail
+    let bkp = outcome_of(&dossier.requirements[2]); // BKP-24H, Undetermined
+    dossier.correspondence = Some(CorrespondenceTable {
+        referential_id: "exemple".to_owned(),
+        referential_title: "Référentiel d'hygiène — exemple".to_owned(),
+        referential_version: "v1".to_owned(),
+        requirements: vec![
+            MappedRequirement {
+                id: "EX-1".to_owned(),
+                title: "L'accès administrateur à distance est maîtrisé".to_owned(),
+                assertions: vec![ssh, mfa],
+            },
+            MappedRequirement {
+                id: "EX-2".to_owned(),
+                title: "La sauvegarde est prouvée sous 24 heures".to_owned(),
+                assertions: vec![bkp.clone()],
+            },
+            MappedRequirement {
+                id: "EX-3".to_owned(),
+                title: "La journalisation est centralisée".to_owned(),
+                assertions: vec![],
+            },
+        ],
+        unmapped_assertions: vec![AssertionOutcome {
+            assertion_id: "HORS-REF".to_owned(),
+            title: "assertion évaluée mais hors référentiel".to_owned(),
+            verdict: Verdict::Pass,
+            coverage: CoverageSummary {
+                observed_permille: 1000,
+                max_gap: DurationMs(3_600_000),
+                gap_count: 0,
+            },
+        }],
+        warnings: vec![
+            "l'exigence EX-2 référence une assertion inconnue du fichier d'assertions : \
+             LOG-CENTRAL"
+                .to_owned(),
+        ],
+    });
+    dossier
+}
+
 #[test]
 fn le_rendu_html_du_dossier_exemple_est_stable() {
     insta::assert_snapshot!("dossier_exemple", render_html(&dossier_exemple()));
+}
+
+#[test]
+fn le_rendu_html_de_la_table_de_correspondance_est_stable() {
+    insta::assert_snapshot!("dossier_referentiel", render_html(&dossier_avec_table()));
+}
+
+#[test]
+fn le_verdict_d_exigence_s_agrege_sans_indulgence() {
+    let dossier = dossier_avec_table();
+    let table = dossier.correspondence.as_ref().unwrap();
+    // Pass + Fail → Fail : une assertion en échec suffit.
+    assert_eq!(table.requirements[0].verdict(), RequirementVerdict::Fail);
+    // Une seule assertion, indéterminée → Undetermined.
+    assert_eq!(
+        table.requirements[1].verdict(),
+        RequirementVerdict::Undetermined
+    );
+    // Aucune assertion mappée → NotCovered, un état à part entière.
+    assert_eq!(
+        table.requirements[2].verdict(),
+        RequirementVerdict::NotCovered
+    );
+    assert_eq!(RequirementVerdict::NotCovered.label(), "Non couverte");
+}
+
+#[test]
+fn une_exigence_non_couverte_est_declaree_jamais_tue() {
+    let html = render_html(&dossier_avec_table());
+    // L'exigence sans assertion apparaît, son état est déclaré.
+    assert!(html.contains("EX-3"));
+    assert!(html.contains("Non couverte"));
+    assert!(html.contains("Exigence non couverte"));
+    // L'avertissement de construction est listé dans le dossier.
+    assert!(html.contains("LOG-CENTRAL"));
+    // L'annexe liste l'assertion hors référentiel.
+    assert!(html.contains("HORS-REF"));
+    assert!(html.contains("non rattachées au référentiel"));
+}
+
+#[test]
+fn la_table_renumerote_les_sections_sans_changer_le_dossier_sans_table() {
+    // Sans table : numérotation historique, aucune section de table.
+    let sans = render_html(&dossier_exemple());
+    assert!(sans.contains("<h2>3. Interruptions"));
+    assert!(sans.contains("<h2>6. Ce que ce dossier ne prouve pas"));
+    assert!(!sans.contains("Table de correspondance"));
+    // Avec table : elle est la section 3, les suivantes glissent d'un cran.
+    let avec = render_html(&dossier_avec_table());
+    assert!(avec.contains("<h2>3. Table de correspondance"));
+    assert!(avec.contains("<h2>4. Interruptions"));
+    assert!(avec.contains("<h2>7. Ce que ce dossier ne prouve pas"));
+}
+
+#[test]
+fn le_dossier_avec_table_se_serialise_et_se_relit() {
+    fn roundtrip(dossier: &EvidenceDossier) -> (Vec<u8>, EvidenceDossier) {
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(dossier, &mut bytes).unwrap();
+        let relu = ciborium::de::from_reader(bytes.as_slice()).unwrap();
+        (bytes, relu)
+    }
+
+    // Rétrocompatibilité serde : un dossier sérialisé SANS le champ
+    // `correspondence` (format d'avant) se relit tel quel (default → None).
+    let dossier = dossier_exemple();
+    let (bytes, relu) = roundtrip(&dossier);
+    let cle = b"correspondence";
+    assert!(
+        !bytes.windows(cle.len()).any(|w| w == cle),
+        "None n'est pas sérialisé (skip_serializing_if) : l'encodage est celui d'avant"
+    );
+    assert_eq!(relu, dossier);
+
+    // Et l'aller-retour complet avec la table.
+    let dossier = dossier_avec_table();
+    let (_, relu) = roundtrip(&dossier);
+    assert_eq!(relu, dossier);
 }
 
 #[test]

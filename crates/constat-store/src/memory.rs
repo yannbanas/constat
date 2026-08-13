@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 use constat_model::{hash_canonical, Blob, BlobHash, Snapshot};
 
-use crate::{JournalEntry, Store, StoreError};
+use crate::journal::check_journal_signature;
+use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};
 
 /// Magasin en mémoire, adressé par contenu.
 ///
@@ -34,7 +35,11 @@ use crate::{JournalEntry, Store, StoreError};
 pub struct MemoryStore {
     blobs: BTreeMap<BlobHash, Blob>,
     snapshots: BTreeMap<BlobHash, Snapshot>,
+    /// Le journal par défaut (celui du trait [`Store`], sémantique v0.1.0).
     journal: Vec<(BlobHash, JournalEntry)>,
+    /// Journaux nommés par la clé publique du signataire (§13 S8) —
+    /// `BTreeMap` pour un ordre d'itération déterministe (§15).
+    named: BTreeMap<JournalId, Vec<(BlobHash, JournalEntry)>>,
 }
 
 impl MemoryStore {
@@ -115,5 +120,57 @@ impl Store for MemoryStore {
 
     fn entries(&self) -> Result<Vec<(BlobHash, JournalEntry)>, StoreError> {
         Ok(self.journal.clone())
+    }
+}
+
+impl MultiJournalStore for MemoryStore {
+    fn append_entry_in(
+        &mut self,
+        journal: &JournalId,
+        entry: &JournalEntry,
+    ) -> Result<BlobHash, StoreError> {
+        // Propriété structurelle : l'entrée doit être signée par la clé de
+        // CE journal — une clé ne peut jamais écrire dans celui d'une autre.
+        check_journal_signature(journal, entry)?;
+
+        let last = self
+            .named
+            .get(journal)
+            .and_then(|chain| chain.last())
+            .map(|(hash, _)| *hash);
+        if entry.prev != last {
+            return Err(StoreError::ChainBroken(format!(
+                "append refusé : `prev` = {:?} mais la dernière entrée du journal est {:?}",
+                entry.prev.map(|h| h.to_hex()),
+                last.map(|h| h.to_hex()),
+            )));
+        }
+        // Empreinte de l'entrée COMPLÈTE (signature incluse) — le maillon
+        // `prev` de l'entrée suivante de ce journal.
+        let hash = hash_canonical(entry)?;
+        self.named
+            .entry(*journal)
+            .or_default()
+            .push((hash, entry.clone()));
+        Ok(hash)
+    }
+
+    fn entries_of(&self, journal: &JournalId) -> Result<Vec<(BlobHash, JournalEntry)>, StoreError> {
+        Ok(self.named.get(journal).cloned().unwrap_or_default())
+    }
+
+    fn last_entry_of(
+        &self,
+        journal: &JournalId,
+    ) -> Result<Option<(BlobHash, JournalEntry)>, StoreError> {
+        Ok(self
+            .named
+            .get(journal)
+            .and_then(|chain| chain.last())
+            .cloned())
+    }
+
+    fn journals(&self) -> Result<Vec<JournalId>, StoreError> {
+        Ok(self.named.keys().copied().collect())
     }
 }

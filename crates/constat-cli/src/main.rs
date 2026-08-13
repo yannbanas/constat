@@ -6,9 +6,10 @@
 //! constat history  --entity "user:jdupont" --attr "user.privileged"
 //! constat timeline --assertion SSH-ROOT --period 2026-Q1
 //! constat check    --period 2026-Q1 --explain
-//! constat pack     --period 2026-Q1 --out dossier-Q1.html
-//! constat anchor   --send http://tsa.exemple.fr/tsr
+//! constat pack     --period 2026-Q1 --referential exemple --out dossier-Q1.html
+//! constat anchor   --send https://tsa.exemple.fr/tsr
 //! constat export   --out ./export
+//! constat verify   ./export
 //! ```
 
 use std::path::PathBuf;
@@ -101,8 +102,9 @@ enum Command {
         /// Fichier de sortie, ex. dossier-Q1.html
         #[arg(long, value_name = "FICHIER")]
         out: PathBuf,
-        /// Référentiel de correspondance, ex. recyf
-        #[arg(long)]
+        /// Référentiel de correspondance : chemin d'un fichier YAML, ou nom
+        /// court résolu en referentials/<nom>.yaml (voir referentials/exemple.yaml)
+        #[arg(long, value_name = "FICHIER-OU-NOM")]
         referential: Option<String>,
         /// Fichier d'assertions
         #[arg(long, default_value = "assertions.yaml", value_name = "FICHIER")]
@@ -129,7 +131,7 @@ enum Command {
         /// Écrit un export de racine signé (niveau 2) dans ce fichier
         #[arg(long, value_name = "FICHIER")]
         export: Option<PathBuf>,
-        /// Envoie la requête RFC 3161 à ce prestataire (http:// uniquement)
+        /// Envoie la requête RFC 3161 à ce prestataire (http:// ou https://)
         /// et archive le jeton dans <magasin>.anchors/<racine>.tsr
         #[arg(long, value_name = "URL")]
         send: Option<String>,
@@ -139,6 +141,12 @@ enum Command {
         /// Organisation, inscrite dans le document d'export
         #[arg(long)]
         organization: Option<String>,
+    },
+    /// Rappelle comment vérifier un dossier SANS Constat (binaire séparé, §10.3)
+    Verify {
+        /// Répertoire d'export à vérifier (produit par `constat export --out`)
+        #[arg(value_name = "DOSSIER")]
+        export: Option<PathBuf>,
     },
     /// Exporte la clôture de preuve du journal, vérifiable par constat-verify
     Export {
@@ -247,6 +255,11 @@ fn main() -> miette::Result<()> {
                 store_path: Some(&store_path),
             };
             println!("{}", commands::cmd_anchor(store.as_ref(), &args)?);
+        }
+        Command::Verify { export } => {
+            // Pas d'ouverture du magasin : cette commande n'est qu'un rappel,
+            // la vérification elle-même est le binaire autonome (§10.3).
+            println!("{}", commands::cmd_verify(export.as_deref()));
         }
         Command::Export { out, pubkey, keys } => {
             let store = storeopen::open_store(&store_path)?;

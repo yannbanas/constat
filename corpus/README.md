@@ -43,7 +43,9 @@ corpus/
 4. Tout bogue d'extraction corrigé donne lieu à un cas de corpus qui
    l'aurait attrapé.
 
-## Premier cas : `sshd/basique`
+## Les cas présents
+
+### `sshd/basique`
 
 Un `sshd_config` Linux réaliste et anonymisé. Points vérifiés :
 
@@ -53,3 +55,31 @@ Un `sshd_config` Linux réaliste et anonymisé. Points vérifiés :
   le fichier — le défaut du système s'applique, et l'extracteur ne doit ni
   l'inventer ni le confondre avec `no` (une directive en commentaire n'est
   pas une directive).
+
+### `sshd/blocs-match`
+
+Directives **dupliquées** (première occurrence gagnante, sémantique OpenSSH)
+et blocs **`Match`** : une directive conditionnelle n'est jamais un fait
+global — `X11Forwarding no` dans un bloc Match donne `absent` au niveau
+global, pas `no`.
+
+### `accounts/comptes-verrouilles`
+
+`/etc/passwd` + `/etc/group` + `/etc/shadow` (section shadow sous forme
+expurgée, la seule qui quitte la machine). Comptes **verrouillés** : `*`
+(pas de mot de passe) et `!` (verrouillé, hachage conservé) sont deux états
+distincts, et un compte verrouillé peut rester membre de `sudo` — le fait
+d'audit par excellence. Algorithme `absent` quand aucun hachage n'existe.
+
+### `packages/half-configured`
+
+Fichier d'état dpkg : l'état est le **troisième mot** de `Status:`. Un paquet
+`half-configured` a une version mais n'est **pas** installé au sens de la
+conformité ; un paragraphe sans champ `Version:` donne `pkg.version` `absent`.
+
+### `kernel_params/partiel`
+
+Dump sysctl **partiel** (IPv6 désactivé au démarrage, module Yama absent) :
+chaque clé de la liste blanche produit un fait même quand elle manque —
+`absent`, jamais 0 ni un défaut inventé. Les clés hors liste blanche ne
+produisent rien.

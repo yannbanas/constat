@@ -1,0 +1,162 @@
+---
+source: crates/constat-report/tests/render.rs
+expression: render_html(&dossier_avec_table())
+---
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Dossier de preuve — Exemple SAS — 2026-01-01 00:00:00 UTC → 2026-03-31 23:59:59 UTC</title>
+<style>
+:root { color-scheme: light; }
+body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; background: #fff;
+max-width: 21cm; margin: 1.5cm auto; padding: 0 1cm; line-height: 1.45; }
+h1 { font-size: 1.6em; border-bottom: 3px double #1a1a1a; padding-bottom: .3em; }
+h2 { font-size: 1.2em; margin-top: 1.6em; border-bottom: 1px solid #999; padding-bottom: .2em; }
+h3 { font-size: 1em; margin-bottom: .2em; }
+table { border-collapse: collapse; width: 100%; margin: .6em 0; }
+th, td { border: 1px solid #bbb; padding: .3em .5em; text-align: left;
+vertical-align: top; font-size: .92em; }
+table.meta th { width: 30%; background: #f4f4f4; font-weight: normal; }
+code { font-family: 'Courier New', monospace; font-size: .92em; }
+code.hash { word-break: break-all; }
+article.req { margin: 1em 0; padding: .5em .8em; border: 1px solid #ccc;
+page-break-inside: avoid; }
+p.ref { color: #555; font-size: .9em; margin: .1em 0; }
+.pass { color: #1d6b2f; }
+.fail { color: #9c1a1a; }
+.undet { color: #8a6d00; }
+.ok { color: #1d6b2f; }
+.alert { color: #9c1a1a; }
+section.limits { border: 2px solid #1a1a1a; padding: .2em 1em .6em; margin-top: 2em;
+page-break-inside: avoid; }
+footer { margin-top: 2em; font-size: .85em; color: #555; text-align: center; }
+@media print { body { margin: 0; max-width: none; } }
+</style>
+</head>
+<body>
+<header>
+<h1>Dossier de preuve de conformité</h1>
+<table class="meta">
+<tr><th>Organisation</th><td>Exemple SAS</td></tr>
+<tr><th>Période couverte</th><td>du 2026-01-01 00:00:00 UTC au 2026-03-31 23:59:59 UTC</td></tr>
+<tr><th>Périmètre</th><td>Serveurs de production, site de Lyon</td></tr>
+<tr><th>Référentiel</th><td>RECYF v2</td></tr>
+<tr><th>Généré le</th><td>2026-04-02 09:00:00 UTC</td></tr>
+</table>
+</header>
+<section>
+<h2>1. Inventaire : machines attendues et machines observées</h2>
+<p>3 machine(s) attendue(s), 3 machine(s) observée(s). <strong>L'écart entre les deux est un constat en soi</strong> : rien ne peut être prouvé sur une machine jamais observée.</p>
+<p class="alert">Machines attendues jamais observées (trou de preuve) :</p>
+<ul>
+<li><code>srv-fic-02</code></li>
+</ul>
+<p class="alert">Machines observées hors inventaire déclaré :</p>
+<ul>
+<li><code>srv-dev-99</code></li>
+</ul>
+</section>
+<section>
+<h2>2. Exigences : verdicts et couverture</h2>
+<article class="req">
+<h3><code>SSH-ROOT</code> — la connexion root en SSH est désactivée</h3>
+<p class="ref">Exigence du référentiel : RECYF 4.2</p>
+<p>Verdict : <strong class="pass">Conforme</strong> — couverture 99,2 %, écart maximal entre deux collectes : 26 h 00 min, 3 interruption(s) déclarée(s).</p>
+</article>
+<article class="req">
+<h3><code>ADM-MFA</code> — tous les comptes privilégiés ont l&#39;authentification forte</h3>
+<p class="ref">Exigence du référentiel : RECYF 2.1</p>
+<p>Verdict : <strong class="fail">Non conforme</strong> — couverture 99,7 %, écart maximal entre deux collectes : 25 h 00 min, 2 interruption(s) déclarée(s).</p>
+<p>Exceptions documentées :</p>
+<ul>
+<li><code>user:svc-sauvegarde</code> — compte de service, authentification par certificat (approuvée par : RSSI, expire le 2027-01-01 00:00:00 UTC)</li>
+<li><code>user:svc-legacy</code> — application ancienne sans prise en charge MFA (approuvée par : RSSI, expire le 2026-01-01 00:00:00 UTC) <strong class="fail">[EXPIRÉE — n'excuse plus la non-conformité]</strong></li>
+</ul>
+</article>
+<article class="req">
+<h3><code>BKP-24H</code> — sauvegarde réussie dans les dernières 24 heures</h3>
+<p>Verdict : <strong class="undet">Indéterminé</strong> — couverture 64,0 %, écart maximal entre deux collectes : 216 h 00 min, 1 interruption(s) déclarée(s).</p>
+</article>
+</section>
+<section>
+<h2>3. Table de correspondance — Référentiel d&#39;hygiène — exemple v1 (<code>exemple</code>)</h2>
+<p>Par exigence du référentiel : les assertions qui la couvrent, leur verdict, et le verdict agrégé de l'exigence. <strong>Une exigence qu'aucune assertion ne couvre est déclarée non couverte</strong> : rien ne peut être affirmé à son sujet.</p>
+<p class="alert">Avertissements à la construction de la table :</p>
+<ul>
+<li class="alert">l&#39;exigence EX-2 référence une assertion inconnue du fichier d&#39;assertions : LOG-CENTRAL</li>
+</ul>
+<article class="req">
+<h3><code>EX-1</code> — L&#39;accès administrateur à distance est maîtrisé</h3>
+<p>Verdict agrégé : <strong class="fail">Non conforme</strong></p>
+<ul>
+<li><code>SSH-ROOT</code> — la connexion root en SSH est désactivée : <strong class="pass">Conforme</strong>, couverture 99,2 %</li>
+<li><code>ADM-MFA</code> — tous les comptes privilégiés ont l&#39;authentification forte : <strong class="fail">Non conforme</strong>, couverture 99,7 %</li>
+</ul>
+</article>
+<article class="req">
+<h3><code>EX-2</code> — La sauvegarde est prouvée sous 24 heures</h3>
+<p>Verdict agrégé : <strong class="undet">Indéterminé</strong></p>
+<ul>
+<li><code>BKP-24H</code> — sauvegarde réussie dans les dernières 24 heures : <strong class="undet">Indéterminé</strong>, couverture 64,0 %</li>
+</ul>
+</article>
+<article class="req">
+<h3><code>EX-3</code> — La journalisation est centralisée</h3>
+<p>Verdict agrégé : <strong class="undet">Non couverte</strong></p>
+<p class="alert">Exigence non couverte : aucune assertion ne lui est rattachée — ce dossier ne prouve rien à son sujet.</p>
+</article>
+<h3>Annexe : assertions évaluées non rattachées au référentiel</h3>
+<ul>
+<li><code>HORS-REF</code> — assertion évaluée mais hors référentiel : <strong class="pass">Conforme</strong>, couverture 100,0 %</li>
+</ul>
+</section>
+<section>
+<h2>4. Interruptions de collecte, déclarées</h2>
+<p>Les interruptions ci-dessous sont déclarées explicitement : un trou non déclaré serait indistinguable d'un effacement.</p>
+<table>
+<tr><th>Machine</th><th>Du</th><th>Au</th><th>Motif</th></tr>
+<tr><td><code>srv-fic-02</code></td><td>2026-02-12 03:00:00 UTC</td><td>2026-02-12 07:12:00 UTC</td><td>machine arrêtée, maintenance</td></tr>
+<tr><td><code>srv-app-01</code></td><td>2026-02-28 14:00:00 UTC</td><td>2026-02-28 14:45:00 UTC</td><td>agent indisponible</td></tr>
+</table>
+</section>
+<section>
+<h2>5. Annexe : artefacts bruts et empreintes</h2>
+<table>
+<tr><th>Machine</th><th>Collecteur</th><th>Collecté le</th><th>Empreinte BLAKE3 du blob</th></tr>
+<tr><td><code>srv-fic-01</code></td><td><code>linux.sshd</code></td><td>2026-02-08 00:00:00 UTC</td><td><code class="hash">7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f</code></td></tr>
+<tr><td><code>srv-app-01</code></td><td><code>linux.accounts</code></td><td>2026-02-08 00:00:00 UTC</td><td><code class="hash">b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8</code></td></tr>
+</table>
+</section>
+<section>
+<h2>6. Preuve et procédure de vérification</h2>
+<table class="meta">
+<tr><th>Racine de Merkle</th><td><code class="hash">abababababababababababababababababababababababababababababababab</code></td></tr>
+<tr><th>Signature de la racine (Ed25519)</th><td><code class="hash">cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd</code></td></tr>
+<tr><th>Clé publique du journal</th><td><code class="hash">efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef</code></td></tr>
+<tr><th>Entrées du journal</th><td>91</td></tr>
+<tr><th>Horodatage qualifié RFC 3161</th><td><strong>absent</strong> — voir la section « Ce que ce dossier ne prouve pas »</td></tr>
+</table>
+<h3>Vérifier ce dossier sans Constat</h3>
+<p>La vérification ne demande aucune confiance envers l'outil qui a produit ce dossier (§10.3). Procédure :</p>
+<ol>
+<li>Obtenez l'export du journal : un répertoire contenant <code>pubkey.bin</code>, les entrées <code>0.cbor</code>…<code>N.cbor</code>, <code>snapshots/</code> et <code>blobs/</code>.</li>
+<li>Exécutez <code>constat-verify &lt;répertoire-export&gt;</code>. Le binaire recalcule chaque empreinte BLAKE3, vérifie le chaînage de la genèse à la racine, chaque signature Ed25519 et la correspondance de chaque artefact avec son empreinte.</li>
+<li>Comparez la racine affichée avec celle de ce dossier (ci-dessus), et la clé publique avec celle communiquée par un canal indépendant.</li>
+<li>Si un jeton RFC 3161 est joint, vérifiez-le auprès du prestataire ou avec <code>openssl ts -verify</code> : il prouve que la racine existait à la date d'horodatage.</li>
+</ol>
+<p>L'algorithme complet est documenté publiquement dans <code>crates/constat-verify/FORMAT.md</code>, assez simplement pour être réimplémenté en une centaine de lignes par un auditeur méfiant.</p>
+</section>
+<section class="limits">
+<h2>7. Ce que ce dossier ne prouve pas</h2>
+<p>Un outil de preuve qui surestime ses garanties est pire qu'inutile. Les limites suivantes font partie du dossier :</p>
+<ul>
+<li><strong>Sans ancrage externe, le journal prouve la cohérence interne, pas la non-répudiation</strong> : celui qui contrôle le magasin et la clé de signature peut tronquer la fin du journal ou repartir de zéro. La parade est la comparaison de la racine avec un ancrage hors du système : racine envoyée au RSSI, jeton d'horodatage RFC 3161 (§6.2, §6.3).</li>
+<li>Un <strong>agent compromis</strong> peut mentir sur l'état de sa machine : un agent est une source, pas un oracle. Le journal prouve ce qui a été enregistré, pas ce qui était vrai.</li>
+<li>Rien n'est prouvé sur une machine où l'agent n'a <strong>jamais été installé</strong> — d'où l'inventaire de la section 1 : l'écart entre attendu et observé est lui-même un constat.</li>
+<li>Ce dossier ne remplace pas une <strong>supervision temps réel</strong> : la granularité est celle de la collecte, et les intervalles entre deux observations sont des inférences déclarées comme telles, jamais des certitudes.</li>
+</ul>
+</section>
+<footer><p>Dossier généré par Constat. La preuve est vérifiable sans Constat.</p></footer>
+</body>
+</html>

@@ -17,5 +17,6 @@ pub mod eval;
 pub mod http;
 pub mod keyres;
 pub mod queries;
+pub mod referential;
 pub mod render;
 pub mod storeopen;

@@ -1,0 +1,29 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 152
+expression: redacted
+---
+# capture ad.groups anonymisée (NetGroupEnum vers le contrôleur EXEMPLE)
+[domain]
+name = EXEMPLE
+
+[group S-1-5-21-3623811015-3361044348-30300820-512]
+name = Admins du domaine
+member = Administrateur
+member = jdupont
+
+[group S-1-5-21-3623811015-3361044348-30300820-513]
+name = Utilisateurs du domaine
+member = Administrateur
+member = jdupont
+member = mmartin
+member = svc-sauvegarde
+
+[group S-1-5-21-3623811015-3361044348-30300820-519]
+name = Administrateurs de l’entreprise
+member = Administrateur
+
+[group S-1-5-21-3623811015-3361044348-30300820-1105]
+name = Exploitation
+member = mmartin
+member = svc-sauvegarde

@@ -1,0 +1,104 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 153
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "group:EXEMPLE\\Administrateurs de l’entreprise",
+        ),
+        attribute: Attribute(
+            "group.members",
+        ),
+        value: List(
+            [
+                Text(
+                    "Administrateur",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "group:EXEMPLE\\Admins du domaine",
+        ),
+        attribute: Attribute(
+            "group.members",
+        ),
+        value: List(
+            [
+                Text(
+                    "Administrateur",
+                ),
+                Text(
+                    "jdupont",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "group:EXEMPLE\\Exploitation",
+        ),
+        attribute: Attribute(
+            "group.members",
+        ),
+        value: List(
+            [
+                Text(
+                    "mmartin",
+                ),
+                Text(
+                    "svc-sauvegarde",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "group:EXEMPLE\\Utilisateurs du domaine",
+        ),
+        attribute: Attribute(
+            "group.members",
+        ),
+        value: List(
+            [
+                Text(
+                    "Administrateur",
+                ),
+                Text(
+                    "jdupont",
+                ),
+                Text(
+                    "mmartin",
+                ),
+                Text(
+                    "svc-sauvegarde",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:EXEMPLE\\Administrateur",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "user:EXEMPLE\\jdupont",
+        ),
+        attribute: Attribute(
+            "user.privileged",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+]

@@ -1,0 +1,142 @@
+# Faits attendus pour corpus/accounts/comptes-verrouilles/capture.txt
+#
+# Le cas d'audit réel : des comptes VERROUILLÉS mais pas supprimés.
+# « verrouillé » (`!` devant le hachage) et « sans mot de passe » (`*`) sont
+# deux états différents, et aucun des deux ne retire le compte des groupes :
+# `ancien-admin` est verrouillé ET toujours membre de sudo — c'est précisément
+# le genre d'écart qu'un auditeur cherche.
+#
+# La section /etc/shadow de la capture est sous sa forme EXPURGÉE
+# (`$id$[EXPURGÉ:hachage]`) : c'est la seule forme autorisée à quitter la
+# machine (§7.2), donc la seule que l'extracteur voit — et le corpus est
+# public, aucun hachage même factice n'y a sa place (règle 1).
+
+collector: accounts
+case: comptes-verrouilles
+
+facts:
+  # --- root : uid 0, « * » = aucun mot de passe utilisable, compte verrouillé
+  - entity: "user:root"
+    attribute: "user.uid"
+    value: { int: 0 }
+  - entity: "user:root"
+    attribute: "user.shell"
+    value: { text: "/bin/bash" }
+  - entity: "user:root"
+    attribute: "user.groups"
+    value: { list: [{ text: "root" }] }
+  - entity: "user:root"
+    attribute: "user.privileged"
+    value: { bool: true }
+  - entity: "user:root"
+    attribute: "user.password.locked"
+    value: { bool: true }
+  - entity: "user:root"
+    attribute: "user.password.set"
+    value: { bool: false }
+  # pas de hachage → pas d'algorithme : Absent, pas une valeur inventée
+  - entity: "user:root"
+    attribute: "user.password.algorithm"
+    value: { absent: true }
+  - entity: "user:root"
+    attribute: "user.password.last_change_days"
+    value: { int: 19000 }
+  - entity: "user:root"
+    attribute: "user.password.max_days"
+    value: { int: 99999 }
+
+  # --- daemon : compte système classique, verrouillé par « * »
+  - entity: "user:daemon"
+    attribute: "user.uid"
+    value: { int: 1 }
+  - entity: "user:daemon"
+    attribute: "user.shell"
+    value: { text: "/usr/sbin/nologin" }
+  - entity: "user:daemon"
+    attribute: "user.groups"
+    value: { list: [{ text: "daemon" }] }
+  - entity: "user:daemon"
+    attribute: "user.privileged"
+    value: { bool: false }
+  - entity: "user:daemon"
+    attribute: "user.password.locked"
+    value: { bool: true }
+  - entity: "user:daemon"
+    attribute: "user.password.set"
+    value: { bool: false }
+  - entity: "user:daemon"
+    attribute: "user.password.algorithm"
+    value: { absent: true }
+
+  # --- mfournier : compte humain actif, yescrypt, expiration à 365 jours
+  - entity: "user:mfournier"
+    attribute: "user.uid"
+    value: { int: 1000 }
+  - entity: "user:mfournier"
+    attribute: "user.groups"
+    value:
+      list:
+        - { text: "mfournier" }
+        - { text: "sudo" }
+        - { text: "users" }
+  - entity: "user:mfournier"
+    attribute: "user.privileged"
+    value: { bool: true }
+  - entity: "user:mfournier"
+    attribute: "user.password.locked"
+    value: { bool: false }
+  - entity: "user:mfournier"
+    attribute: "user.password.set"
+    value: { bool: true }
+  - entity: "user:mfournier"
+    attribute: "user.password.algorithm"
+    value: { text: "yescrypt" }
+  - entity: "user:mfournier"
+    attribute: "user.password.last_change_days"
+    value: { int: 20390 }
+  - entity: "user:mfournier"
+    attribute: "user.password.max_days"
+    value: { int: 365 }
+
+  # --- svc-sauvegarde : verrouillé par « ! », mais un hachage EXISTE encore
+  # (locked=true ET set=true : déverrouillable d'un `usermod -U`, ce qui
+  # n'est pas la même chose qu'un compte sans mot de passe)
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.uid"
+    value: { int: 998 }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.privileged"
+    value: { bool: false }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.password.locked"
+    value: { bool: true }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.password.set"
+    value: { bool: true }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.password.algorithm"
+    value: { text: "sha512" }
+
+  # --- ancien-admin : LE fait qui compte — verrouillé, mais toujours membre
+  # de sudo. Le verrouillage ne retire pas les privilèges.
+  - entity: "user:ancien-admin"
+    attribute: "user.uid"
+    value: { int: 1001 }
+  - entity: "user:ancien-admin"
+    attribute: "user.groups"
+    value:
+      list:
+        - { text: "ancien-admin" }
+        - { text: "sudo" }
+  - entity: "user:ancien-admin"
+    attribute: "user.privileged"
+    value: { bool: true }
+  - entity: "user:ancien-admin"
+    attribute: "user.password.locked"
+    value: { bool: true }
+  - entity: "user:ancien-admin"
+    attribute: "user.password.set"
+    value: { bool: true }
+  - entity: "user:ancien-admin"
+    attribute: "user.password.algorithm"
+    value: { text: "sha512" }

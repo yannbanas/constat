@@ -4,7 +4,13 @@
 //!
 //! Vérifie la promesse centrale du transport :
 //! - les objets poussés arrivent avec les **mêmes empreintes** et la chaîne
-//!   se vérifie côté serveur (`verify_chain`) ;
+//!   se vérifie côté serveur (`verify_chain`) — dans le journal nommé de la
+//!   clé de l'agent, le journal par défaut du magasin restant intact ;
+//! - deux agents poussent en **entrelacé** sans se marcher dessus : deux
+//!   journaux, deux chaînes vérifiables indépendamment, et une clé qui
+//!   rejoue une entrée de l'autre est refusée ;
+//! - `--allowed-agents` : une clé absente de l'allowlist est refusée (403)
+//!   avant toute écriture ;
 //! - un client sans certificat (ou signé par la mauvaise autorité) est
 //!   refusé à la poignée de main — mTLS obligatoire, pas de repli ;
 //! - un blob altéré en vol (empreinte annoncée ≠ recalculée) est refusé,
@@ -13,14 +19,15 @@
 
 #![allow(clippy::unwrap_used)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use constat_agent::push::{build_batch, push, PushConfig, PushError};
+use constat_agent::push::{build_batch, push, PushBatch, PushConfig, PushError};
 use constat_model::{blob_hash, Blob, Fact, Snapshot, Timestamp};
+use constat_server::receive::AgentPolicy;
 use constat_server::serve::{self, SharedStore};
 use constat_store::{append_signed, verify_chain, MemoryStore, Signer, Store};
 use rcgen::{
@@ -147,12 +154,42 @@ impl Drop for TestPki {
 // ---------------------------------------------------------------------------
 
 fn start_server(pki: &TestPki) -> (SocketAddr, SharedStore) {
+    start_server_with_policy(pki, AgentPolicy::Tofu)
+}
+
+fn start_server_with_policy(pki: &TestPki, policy: AgentPolicy) -> (SocketAddr, SharedStore) {
     let tls = serve::load_tls(&pki.server_cert, &pki.server_key, &pki.agents_ca).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(MemoryStore::new()));
-    let server = serve::Server::bind("127.0.0.1:0", tls, Arc::clone(&store)).unwrap();
+    let server = serve::Server::bind("127.0.0.1:0", tls, Arc::clone(&store))
+        .unwrap()
+        .with_policy(policy);
     let addr = server.local_addr().unwrap();
     std::thread::spawn(move || server.run());
     (addr, store)
+}
+
+/// Ajoute une collecte journalisée et signée au magasin local d'un agent.
+fn add_collecte(store: &mut MemoryStore, signer: &Signer, asset: &str, i: usize) {
+    let blob = Blob::new(
+        "linux.sshd",
+        format!("PermitRootLogin no # {asset} collecte {i}\n").into_bytes(),
+        vec![
+            Fact::new("service:sshd", "sshd.PermitRootLogin", "no"),
+            Fact::new("user:root", "user.privileged", true),
+        ],
+    );
+    let hash = store.put_blob(&blob).unwrap();
+    let mut blobs = BTreeMap::new();
+    blobs.insert("linux.sshd".into(), hash);
+    let snapshot = Snapshot::new(asset, Timestamp(1_000 + i as i64), blobs);
+    let snapshot_hash = store.put_snapshot(&snapshot).unwrap();
+    append_signed(
+        store,
+        signer,
+        vec![snapshot_hash],
+        Timestamp(1_000 + i as i64),
+    )
+    .unwrap();
 }
 
 /// Remplit un magasin local d'agent : `n` collectes journalisées et signées.
@@ -160,26 +197,7 @@ fn fill_agent_store(n: usize) -> (MemoryStore, Signer) {
     let mut store = MemoryStore::new();
     let signer = Signer::generate();
     for i in 0..n {
-        let blob = Blob::new(
-            "linux.sshd",
-            format!("PermitRootLogin no # collecte {i}\n").into_bytes(),
-            vec![
-                Fact::new("service:sshd", "sshd.PermitRootLogin", "no"),
-                Fact::new("user:root", "user.privileged", true),
-            ],
-        );
-        let hash = store.put_blob(&blob).unwrap();
-        let mut blobs = BTreeMap::new();
-        blobs.insert("linux.sshd".into(), hash);
-        let snapshot = Snapshot::new("srv-01", Timestamp(1_000 + i as i64), blobs);
-        let snapshot_hash = store.put_snapshot(&snapshot).unwrap();
-        append_signed(
-            &mut store,
-            &signer,
-            vec![snapshot_hash],
-            Timestamp(1_000 + i as i64),
-        )
-        .unwrap();
+        add_collecte(&mut store, &signer, "srv-01", i);
     }
     (store, signer)
 }
@@ -206,7 +224,9 @@ fn pousse_verifie_rejoue_et_refuse_l_altere() {
     .unwrap();
     push(&config, &batch).unwrap();
 
-    // Mêmes objets, mêmes empreintes, chaîne vérifiable côté serveur.
+    // Mêmes objets, mêmes empreintes, chaîne vérifiable côté serveur — dans
+    // le journal nommé de la clé de l'agent (§13 S8).
+    let journal = signer.verifying_key().to_bytes();
     {
         let guard = server_store.lock().unwrap();
         for blob in &batch.blobs {
@@ -219,18 +239,26 @@ fn pousse_verifie_rejoue_et_refuse_l_altere() {
             assert_eq!(&guard.get_blob(&hash).unwrap(), blob);
         }
         let agent_entries = agent_store.entries().unwrap();
-        let server_entries = guard.entries().unwrap();
+        let server_entries = guard.entries_of(&journal).unwrap();
         assert_eq!(server_entries, agent_entries);
         verify_chain(&server_entries, &signer.verifying_key()).unwrap();
-        assert_eq!(guard.root().unwrap(), agent_store.root().unwrap());
+        assert_eq!(
+            guard.root_of(&journal).unwrap(),
+            agent_store.root().unwrap()
+        );
+        // Le journal par défaut du magasin central n'est pas touché.
+        assert_eq!(guard.root().unwrap(), None);
     }
 
     // Double poussée : idempotente, le magasin du serveur ne bouge pas.
     push(&config, &batch).unwrap();
     {
         let guard = server_store.lock().unwrap();
-        assert_eq!(guard.entries().unwrap().len(), 2);
-        assert_eq!(guard.root().unwrap(), agent_store.root().unwrap());
+        assert_eq!(guard.entries_of(&journal).unwrap().len(), 2);
+        assert_eq!(
+            guard.root_of(&journal).unwrap(),
+            agent_store.root().unwrap()
+        );
     }
 
     // Blob altéré en vol : l'empreinte recalculée ne correspond plus à celle
@@ -246,7 +274,136 @@ fn pousse_verifie_rejoue_et_refuse_l_altere() {
     {
         let guard = server_store.lock().unwrap();
         assert!(!guard.has_blob(&altered_hash).unwrap());
-        assert_eq!(guard.entries().unwrap().len(), 2);
+        assert_eq!(guard.entries_of(&journal).unwrap().len(), 2);
+    }
+}
+
+/// Deux agents — deux clés, deux chaînes — poussent en entrelacé vers le
+/// même serveur : chacun atterrit dans SON journal, les deux chaînes restent
+/// intactes et se vérifient indépendamment. Puis une clé rejoue une entrée
+/// de l'autre : refusée — une clé ne peut jamais écrire dans le journal
+/// d'une autre.
+#[test]
+fn deux_agents_entrelaces_deux_chaines_independantes() {
+    let pki = TestPki::generate("deux-agents");
+    let (addr, server_store) = start_server(&pki);
+    let config = pki.push_config(addr);
+
+    let mut store_a = MemoryStore::new();
+    let signer_a = Signer::generate();
+    let mut store_b = MemoryStore::new();
+    let signer_b = Signer::generate();
+    let journal_a = signer_a.verifying_key().to_bytes();
+    let journal_b = signer_b.verifying_key().to_bytes();
+
+    // Poussées entrelacées : A(1), B(1), A(2), B(2), B(3) — chaque poussée
+    // rejoue tout le magasin local (idempotent) plus le nouveau.
+    let plan: [(&str, usize); 5] = [("a", 1), ("b", 1), ("a", 2), ("b", 2), ("b", 3)];
+    for (who, i) in plan {
+        let (store, signer, asset) = if who == "a" {
+            (&mut store_a, &signer_a, "srv-a")
+        } else {
+            (&mut store_b, &signer_b, "srv-b")
+        };
+        add_collecte(store, signer, asset, i);
+        let batch = build_batch(store, signer.verifying_key().to_bytes(), asset.into()).unwrap();
+        push(&config, &batch).unwrap();
+    }
+
+    // Deux journaux, deux chaînes intactes, vérifiées indépendamment —
+    // chacune identique à celle du magasin local de son agent.
+    {
+        let guard = server_store.lock().unwrap();
+        let entries_a = guard.entries_of(&journal_a).unwrap();
+        let entries_b = guard.entries_of(&journal_b).unwrap();
+        assert_eq!(entries_a, store_a.entries().unwrap());
+        assert_eq!(entries_b, store_b.entries().unwrap());
+        verify_chain(&entries_a, &signer_a.verifying_key()).unwrap();
+        verify_chain(&entries_b, &signer_b.verifying_key()).unwrap();
+        assert_eq!(guard.journals().unwrap().len(), 2);
+        assert_eq!(guard.root().unwrap(), None, "journal par défaut intact");
+    }
+
+    // La clé A rejoue une entrée du journal de B (objets déjà connus du
+    // serveur, entrée signée par B) : 422, et rien ne bouge nulle part.
+    let vol = PushBatch {
+        agent_public_key: journal_a,
+        asset: "srv-b".into(),
+        blobs: vec![],
+        snapshots: vec![],
+        entries: store_b
+            .entries()
+            .unwrap()
+            .into_iter()
+            .map(|(_, e)| e)
+            .take(1)
+            .collect(),
+    };
+    let err = push(&config, &vol).unwrap_err();
+    assert!(
+        matches!(err, PushError::Refused { status: 422 }),
+        "attendu un refus 422, obtenu : {err}"
+    );
+    {
+        let guard = server_store.lock().unwrap();
+        assert_eq!(
+            guard.entries_of(&journal_a).unwrap(),
+            store_a.entries().unwrap()
+        );
+        assert_eq!(
+            guard.entries_of(&journal_b).unwrap(),
+            store_b.entries().unwrap()
+        );
+    }
+}
+
+/// `--allowed-agents` : la clé absente de l'allowlist est refusée avec 403
+/// AVANT toute écriture ; la clé listée passe normalement.
+#[test]
+fn allowlist_cle_absente_refusee_403() {
+    let pki = TestPki::generate("allowlist");
+    let (store_a, signer_a) = fill_agent_store(1);
+    let (store_b, signer_b) = fill_agent_store(1);
+
+    // Seul A est autorisé.
+    let policy = AgentPolicy::Allowlist(BTreeSet::from([signer_a.verifying_key().to_bytes()]));
+    let (addr, server_store) = start_server_with_policy(&pki, policy);
+    let config = pki.push_config(addr);
+
+    // B (clé absente) : 403, et aucune écriture — pas même un blob.
+    let batch_b = build_batch(
+        &store_b,
+        signer_b.verifying_key().to_bytes(),
+        "srv-b".into(),
+    )
+    .unwrap();
+    let err = push(&config, &batch_b).unwrap_err();
+    assert!(
+        matches!(err, PushError::Refused { status: 403 }),
+        "attendu un refus 403, obtenu : {err}"
+    );
+    {
+        let guard = server_store.lock().unwrap();
+        assert!(guard.journals().unwrap().is_empty());
+        for blob in &batch_b.blobs {
+            assert!(!guard.has_blob(&blob_hash(blob).unwrap()).unwrap());
+        }
+    }
+
+    // A (clé listée) : accepté, son journal existe.
+    let batch_a = build_batch(
+        &store_a,
+        signer_a.verifying_key().to_bytes(),
+        "srv-a".into(),
+    )
+    .unwrap();
+    push(&config, &batch_a).unwrap();
+    {
+        let guard = server_store.lock().unwrap();
+        assert_eq!(
+            guard.journals().unwrap(),
+            vec![signer_a.verifying_key().to_bytes()]
+        );
     }
 }
 

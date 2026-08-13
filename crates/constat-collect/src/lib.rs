@@ -15,6 +15,7 @@ pub mod backup;
 pub mod capture;
 pub mod linux;
 pub mod redact;
+pub mod windows;
 
 /// Capture brute, telle que lue sur la machine. Peut contenir des secrets :
 /// ne doit JAMAIS être émise telle quelle.
@@ -53,14 +54,21 @@ pub trait Collector {
 pub fn all_collectors() -> Vec<Box<dyn Collector>> {
     vec![
         Box::new(linux::accounts::AccountsCollector::default()),
+        // …et leur miroir Windows/Active Directory (§13 S5) : comptes
+        // privilégiés d'abord, là aussi
+        Box::new(windows::accounts::AccountsCollector),
+        Box::new(windows::ad_groups::AdGroupsCollector),
         Box::new(backup::BackupProofCollector::default()),
         Box::new(linux::sshd::SshdCollector::default()),
         Box::new(linux::sudoers::SudoersCollector::default()),
+        Box::new(windows::password_policy::PasswordPolicyCollector),
+        Box::new(windows::gpo_security::GpoSecurityCollector),
         // priorité haute (§7.3) : correctifs (délai réel d'application)…
         Box::new(linux::packages::PackagesCollector::default()),
         // …puis segmentation (qu'est-ce qui écoute), services, durcissement
         Box::new(linux::ports::PortsCollector::default()),
         Box::new(linux::systemd::SystemdCollector::default()),
+        Box::new(windows::services::ServicesCollector),
         Box::new(linux::kernel_params::KernelParamsCollector::default()),
     ]
 }
@@ -76,27 +84,53 @@ mod tests {
             ids,
             vec![
                 "linux.accounts",
+                "windows.accounts",
+                "ad.groups",
                 "backup.proof",
                 "linux.sshd",
                 "linux.sudoers",
+                "windows.password_policy",
+                "ad.gpo_security",
                 "linux.packages",
                 "linux.ports",
                 "linux.systemd",
+                "windows.services",
                 "linux.kernel_params"
             ]
         );
     }
 
+    /// Sur une plateforme non-Unix, les collecteurs Unix (`linux.*`,
+    /// `backup.proof`) déclarent proprement leur indisponibilité.
     #[cfg(not(unix))]
     #[test]
-    fn sur_non_unix_collect_retourne_unavailable() {
+    fn sur_non_unix_les_collecteurs_unix_retournent_unavailable() {
         for collector in all_collectors() {
+            let id = collector.id().0;
+            if !(id.starts_with("linux.") || id == "backup.proof") {
+                continue;
+            }
             match collector.collect() {
                 Err(CollectError::Unavailable(_)) => {}
-                autre => panic!(
-                    "{} : attendu Unavailable sur non-unix, obtenu {autre:?}",
-                    collector.id().0
-                ),
+                autre => panic!("{id} : attendu Unavailable sur non-unix, obtenu {autre:?}"),
+            }
+        }
+    }
+
+    /// Miroir : sur une plateforme non-Windows, les collecteurs Windows et
+    /// Active Directory (`windows.*`, `ad.*`) déclarent proprement leur
+    /// indisponibilité.
+    #[cfg(not(windows))]
+    #[test]
+    fn sur_non_windows_les_collecteurs_windows_retournent_unavailable() {
+        for collector in all_collectors() {
+            let id = collector.id().0;
+            if !(id.starts_with("windows.") || id.starts_with("ad.")) {
+                continue;
+            }
+            match collector.collect() {
+                Err(CollectError::Unavailable(_)) => {}
+                autre => panic!("{id} : attendu Unavailable sur non-windows, obtenu {autre:?}"),
             }
         }
     }

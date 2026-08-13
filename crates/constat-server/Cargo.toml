@@ -14,6 +14,9 @@ clap = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
+# Clés publiques d'agents : allowlist (--allowed-agents) et inventaire
+# `constat-server journals` (affichage hex abrégé).
+hex = { workspace = true }
 # Écouteur mTLS synchrone : rustls sur std::net::TcpListener, un thread par
 # connexion — pas de runtime async, pas de bibliothèque HTTP.
 # Fournisseur cryptographique `ring` explicitement (et non le défaut

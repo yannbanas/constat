@@ -2,12 +2,22 @@
 //!
 //! ## Tables
 //!
-//! | Table       | Clé                       | Valeur                                        |
-//! |-------------|---------------------------|-----------------------------------------------|
-//! | `blobs`     | empreinte BLAKE3 (32 o)   | CBOR canonique du [`Blob`], **compressé zstd** |
-//! | `snapshots` | empreinte BLAKE3 (32 o)   | CBOR canonique du [`Snapshot`]                |
-//! | `journal`   | index séquentiel (`u64`)  | empreinte de l'entrée (32 o)                  |
-//! | `entries`   | empreinte de l'entrée     | CBOR canonique de la [`JournalEntry`]         |
+//! | Table              | Clé                                    | Valeur                                        |
+//! |--------------------|----------------------------------------|-----------------------------------------------|
+//! | `blobs`            | empreinte BLAKE3 (32 o)                | CBOR canonique du [`Blob`], **compressé zstd** |
+//! | `snapshots`        | empreinte BLAKE3 (32 o)                | CBOR canonique du [`Snapshot`]                |
+//! | `journal`          | index séquentiel (`u64`)               | empreinte de l'entrée (32 o)                  |
+//! | `entries`          | empreinte de l'entrée                  | CBOR canonique de la [`JournalEntry`]         |
+//! | `journaux_nommes`  | (clé du signataire 32 o, index `u64`)  | empreinte de l'entrée (32 o)                  |
+//!
+//! ## Journaux nommés et migration (§13 S8)
+//!
+//! `journaux_nommes` porte les index des journaux nommés par la clé publique
+//! du signataire ([`crate::MultiJournalStore`]) ; le contenu des entrées reste
+//! dans `entries`, partagé et adressé par contenu. Un magasin v0.1.0 s'ouvre
+//! tel quel : la table manquante est simplement créée vide à l'ouverture, et
+//! le journal historique (`journal`) devient le journal par défaut — aucune
+//! donnée n'est déplacée ni réécrite.
 //!
 //! ## Compression
 //!
@@ -39,7 +49,8 @@ use constat_model::{
 };
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 
-use crate::{JournalEntry, Store, StoreError};
+use crate::journal::check_journal_signature;
+use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};
 
 /// Table des blobs : empreinte → CBOR canonique compressé zstd.
 const BLOBS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blobs");
@@ -49,6 +60,10 @@ const SNAPSHOTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("snapshots
 const JOURNAL: TableDefinition<u64, &[u8]> = TableDefinition::new("journal");
 /// Entrées du journal : empreinte d'entrée → CBOR canonique de l'entrée.
 const ENTRIES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("entries");
+/// Journaux nommés : (clé publique du signataire, index séquentiel dans ce
+/// journal) → empreinte d'entrée. Le contenu des entrées reste dans `entries`.
+const NAMED_JOURNALS: TableDefinition<(&[u8; 32], u64), &[u8; 32]> =
+    TableDefinition::new("journaux_nommes");
 
 /// Niveau de compression zstd (3 = défaut : bon compromis débit/ratio).
 const ZSTD_LEVEL: i32 = 3;
@@ -84,12 +99,17 @@ impl RedbStore {
         // peuvent pas ouvrir une table inexistante. On ne lance la
         // transaction d'écriture que si une table manque, pour que la simple
         // réouverture d'un magasin existant ne modifie pas le fichier.
+        // `journaux_nommes` est apparue après la v0.1.0 : sur un magasin
+        // existant elle est simplement créée vide — migration transparente,
+        // le journal historique devient le journal par défaut, aucune donnée
+        // n'est déplacée.
         let needs_init = {
             let tx = db.begin_read().map_err(backend)?;
             tx.open_table(BLOBS).is_err()
                 || tx.open_table(SNAPSHOTS).is_err()
                 || tx.open_table(JOURNAL).is_err()
                 || tx.open_table(ENTRIES).is_err()
+                || tx.open_table(NAMED_JOURNALS).is_err()
         };
         if needs_init {
             let tx = db.begin_write().map_err(backend)?;
@@ -98,6 +118,7 @@ impl RedbStore {
                 tx.open_table(SNAPSHOTS).map_err(backend)?;
                 tx.open_table(JOURNAL).map_err(backend)?;
                 tx.open_table(ENTRIES).map_err(backend)?;
+                tx.open_table(NAMED_JOURNALS).map_err(backend)?;
             }
             tx.commit().map_err(backend)?;
         }
@@ -315,6 +336,130 @@ impl Store for RedbStore {
                 })?;
             let entry = Self::decode_entry(guard.value())?;
             out.push((hash, entry));
+        }
+        Ok(out)
+    }
+}
+
+impl MultiJournalStore for RedbStore {
+    fn append_entry_in(
+        &mut self,
+        journal: &JournalId,
+        entry: &JournalEntry,
+    ) -> Result<BlobHash, StoreError> {
+        // Propriété structurelle : l'entrée doit être signée par la clé de
+        // CE journal — une clé ne peut jamais écrire dans celui d'une autre.
+        check_journal_signature(journal, entry)?;
+
+        // Empreinte de l'entrée COMPLÈTE (signature incluse).
+        let hash = hash_canonical(entry)?;
+        let bytes = to_canonical_bytes(entry)?;
+
+        // Une seule transaction d'écriture : la lecture du dernier maillon,
+        // la vérification du chaînage et l'insertion sont atomiques.
+        let tx = self.db.begin_write().map_err(backend)?;
+        {
+            let mut named = tx.open_table(NAMED_JOURNALS).map_err(backend)?;
+            let (next_index, last) = {
+                let mut range = named
+                    .range((journal, 0u64)..=(journal, u64::MAX))
+                    .map_err(backend)?;
+                match range.next_back() {
+                    Some(item) => {
+                        let (key_guard, value_guard) = item.map_err(backend)?;
+                        let (_, index) = key_guard.value();
+                        (index + 1, Some(BlobHash(*value_guard.value())))
+                    }
+                    None => (0, None),
+                }
+            };
+            if entry.prev != last {
+                // La transaction est abandonnée à la sortie (drop = abort).
+                return Err(StoreError::ChainBroken(format!(
+                    "append refusé : `prev` = {:?} mais la dernière entrée du journal est {:?}",
+                    entry.prev.map(|h| h.to_hex()),
+                    last.map(|h| h.to_hex()),
+                )));
+            }
+            let mut entries = tx.open_table(ENTRIES).map_err(backend)?;
+            entries
+                .insert(hash.0.as_slice(), bytes.as_slice())
+                .map_err(backend)?;
+            named
+                .insert((journal, next_index), &hash.0)
+                .map_err(backend)?;
+        }
+        tx.commit().map_err(backend)?;
+        Ok(hash)
+    }
+
+    fn entries_of(&self, journal: &JournalId) -> Result<Vec<(BlobHash, JournalEntry)>, StoreError> {
+        let tx = self.db.begin_read().map_err(backend)?;
+        let named = tx.open_table(NAMED_JOURNALS).map_err(backend)?;
+        let entries = tx.open_table(ENTRIES).map_err(backend)?;
+        let mut out = Vec::new();
+        for item in named
+            .range((journal, 0u64)..=(journal, u64::MAX))
+            .map_err(backend)?
+        {
+            let (_, value_guard) = item.map_err(backend)?;
+            let hash = BlobHash(*value_guard.value());
+            let guard = entries
+                .get(hash.0.as_slice())
+                .map_err(backend)?
+                .ok_or_else(|| {
+                    StoreError::ChainBroken(format!(
+                        "le journal référence l'entrée {} qui n'existe pas",
+                        hash.to_hex()
+                    ))
+                })?;
+            let entry = Self::decode_entry(guard.value())?;
+            out.push((hash, entry));
+        }
+        Ok(out)
+    }
+
+    fn last_entry_of(
+        &self,
+        journal: &JournalId,
+    ) -> Result<Option<(BlobHash, JournalEntry)>, StoreError> {
+        let tx = self.db.begin_read().map_err(backend)?;
+        let named = tx.open_table(NAMED_JOURNALS).map_err(backend)?;
+        let hash = {
+            let mut range = named
+                .range((journal, 0u64)..=(journal, u64::MAX))
+                .map_err(backend)?;
+            match range.next_back() {
+                Some(item) => BlobHash(*item.map_err(backend)?.1.value()),
+                None => return Ok(None),
+            }
+        };
+        let entries = tx.open_table(ENTRIES).map_err(backend)?;
+        let guard = entries
+            .get(hash.0.as_slice())
+            .map_err(backend)?
+            .ok_or_else(|| {
+                StoreError::ChainBroken(format!(
+                    "le journal référence l'entrée {} qui n'existe pas",
+                    hash.to_hex()
+                ))
+            })?;
+        let entry = Self::decode_entry(guard.value())?;
+        Ok(Some((hash, entry)))
+    }
+
+    fn journals(&self) -> Result<Vec<JournalId>, StoreError> {
+        let tx = self.db.begin_read().map_err(backend)?;
+        let named = tx.open_table(NAMED_JOURNALS).map_err(backend)?;
+        let mut out: Vec<JournalId> = Vec::new();
+        // Les clés sont triées (journal, index) : il suffit de relever chaque
+        // premier composant distinct — l'ordre de sortie est déterministe.
+        for item in named.iter().map_err(backend)? {
+            let (key_guard, _) = item.map_err(backend)?;
+            let (journal, _) = key_guard.value();
+            if out.last() != Some(journal) {
+                out.push(*journal);
+            }
         }
         Ok(out)
     }

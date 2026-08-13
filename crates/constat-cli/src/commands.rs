@@ -19,7 +19,7 @@ use miette::{miette, IntoDiagnostic};
 
 use crate::coverage::DEFAULT_MAX_EXPECTED_GAP;
 use crate::datetime::{self, format_timestamp, parse_period, parse_timestamp};
-use crate::{anchors, eval, http, keyres, queries, render};
+use crate::{anchors, eval, http, keyres, queries, referential, render};
 
 /// `constat state --asset <id> --at <date>` : dernier snapshot antérieur + faits.
 pub fn cmd_state(store: &dyn Store, asset: &str, at: &str) -> miette::Result<String> {
@@ -217,6 +217,11 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
     let assertions = load_assertions(args.assertions_path)?;
     let (evaluations, inputs) = evaluate_all(store, &assertions, period)?;
 
+    // Référentiel de correspondance (§10.2.3) : chargé d'abord — un
+    // référentiel introuvable ou invalide doit échouer avant d'écrire quoi
+    // que ce soit.
+    let referential_file = args.referential.map(referential::load).transpose()?;
+
     let snaps = queries::snapshots(store).into_diagnostic()?;
     let mut observed: Vec<AssetId> = snaps
         .iter()
@@ -248,8 +253,10 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
         ),
     };
 
-    // Exigences : verdicts, couverture, exceptions datées.
+    // Exigences : verdicts, couverture, exceptions datées — et, en parallèle,
+    // les mêmes verdicts sous la forme reprise par la table de correspondance.
     let mut requirements = Vec::with_capacity(evaluations.len());
+    let mut outcomes = Vec::with_capacity(evaluations.len());
     for (e, a) in evaluations.iter().zip(assertions.iter()) {
         let mut exceptions = Vec::with_capacity(a.exceptions.len());
         for exc in &a.exceptions {
@@ -260,25 +267,37 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
                 expires: exc.expires_at().into_diagnostic()?,
             });
         }
+        let verdict = match e.verdict {
+            Verdict::Pass => report::Verdict::Pass,
+            Verdict::Fail => report::Verdict::Fail,
+            Verdict::Undetermined => report::Verdict::Undetermined,
+        };
+        let coverage = report::CoverageSummary {
+            observed_permille: (e.coverage.observed_ppm / 1_000) as u16,
+            max_gap: e.coverage.max_gap,
+            gap_count: e.coverage.gaps.len() as u32,
+        };
+        outcomes.push(report::AssertionOutcome {
+            assertion_id: e.assertion.0.clone(),
+            title: e.title.clone(),
+            verdict,
+            coverage,
+        });
         requirements.push(report::RequirementReport {
             assertion_id: e.assertion.0.clone(),
             title: e.title.clone(),
-            // TODO(integration) : table de correspondance par référentiel
-            // (exigence RECYF/ISO ↔ assertion), à venir dans constat-report.
             requirement_ref: None,
-            verdict: match e.verdict {
-                Verdict::Pass => report::Verdict::Pass,
-                Verdict::Fail => report::Verdict::Fail,
-                Verdict::Undetermined => report::Verdict::Undetermined,
-            },
-            coverage: report::CoverageSummary {
-                observed_permille: (e.coverage.observed_ppm / 1_000) as u16,
-                max_gap: e.coverage.max_gap,
-                gap_count: e.coverage.gaps.len() as u32,
-            },
+            verdict,
+            coverage,
             exceptions,
         });
     }
+
+    // Table de correspondance : verdicts issus de l'évaluation ci-dessus,
+    // assertions inconnues du référentiel en avertissements listés.
+    let correspondence = referential_file
+        .as_ref()
+        .map(|f| referential::build_table(f, &outcomes));
 
     // Interruptions par machine, déclarées explicitement (§10.2.4).
     let mut outages = Vec::new();
@@ -349,10 +368,18 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
             period_end: period.to,
             scope: format!("{} machine(s) observée(s)", observed.len()),
             generated_at: datetime::now(),
-            referential: args.referential.map(str::to_string),
+            // En couverture : l'identité du référentiel chargé, pas
+            // l'argument brut de la ligne de commande.
+            referential: referential_file.as_ref().map(|f| {
+                format!(
+                    "{} {} ({})",
+                    f.referential.title, f.referential.version, f.referential.id
+                )
+            }),
         },
         inventory: report::Inventory { expected, observed },
         requirements,
+        correspondence,
         outages,
         artifacts,
         proof,
@@ -367,12 +394,76 @@ pub fn cmd_pack(store: &dyn Store, args: &PackArgs<'_>) -> miette::Result<String
         "\nAucun jeton d'horodatage pour la racine courante — absence déclarée dans le \
          dossier (`constat anchor --send <url>` pour ancrer)."
     };
+    // La table de correspondance résume son contenu sur la sortie, et ses
+    // avertissements (assertions inconnues référencées) sont listés — dans
+    // le dossier ET ici, jamais tus.
+    let referential_note = match &dossier.correspondence {
+        Some(table) => {
+            let uncovered = table
+                .requirements
+                .iter()
+                .filter(|r| r.verdict() == report::RequirementVerdict::NotCovered)
+                .count();
+            let mut note = format!(
+                "\nTable de correspondance « {} {} » : {} exigence(s), dont {} non couverte(s) ; \
+                 {} assertion(s) hors référentiel en annexe.",
+                table.referential_title,
+                table.referential_version,
+                table.requirements.len(),
+                uncovered,
+                table.unmapped_assertions.len()
+            );
+            for warning in &table.warnings {
+                note.push_str(&format!("\nAvertissement : {warning}."));
+            }
+            note
+        }
+        None => String::new(),
+    };
     Ok(format!(
-        "Dossier de preuve écrit : {} (HTML autonome, imprimable en PDF).{}{}",
+        "Dossier de preuve écrit : {} (HTML autonome, imprimable en PDF).{}{}{}",
         args.out.display(),
         anchor_note,
+        referential_note,
         inventory_note
     ))
+}
+
+/// `constat verify [DOSSIER]` : rappelle où est le vérificateur **autonome**
+/// et comment le lancer. Volontairement PAS une réimplémentation de la
+/// vérification dans la CLI : si contrôler un dossier exigeait de faire
+/// confiance à l'outil qui l'a produit, ce ne serait pas une preuve (§10.3).
+pub fn cmd_verify(export: Option<&Path>) -> String {
+    let name = format!("constat-verify{}", std::env::consts::EXE_SUFFIX);
+    // Le binaire est distribué à côté de `constat` : on le cherche là.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(&name)))
+        .filter(|p| p.is_file());
+    let binary = match &sibling {
+        Some(path) => path.display().to_string(),
+        None => name.clone(),
+    };
+    let target = match export {
+        Some(path) => path.display().to_string(),
+        None => "<répertoire-export>".to_string(),
+    };
+    let location_note = match &sibling {
+        Some(path) => format!("Binaire autonome : {}", path.display()),
+        None => format!(
+            "Binaire autonome : {name} (introuvable à côté de `constat` — il est \
+             distribué séparément, précisément pour être remis à l'auditeur)"
+        ),
+    };
+    format!(
+        "La vérification est un binaire séparé, volontairement : si contrôler un dossier \
+         exigeait de faire confiance à l'outil qui l'a produit, ce ne serait pas une \
+         preuve (§10.3).\n\
+         {location_note}\n\
+         Commande : {binary} {target}\n\
+         (répertoire produit par `constat export --out <répertoire-export>` ; algorithme \
+         documenté dans crates/constat-verify/FORMAT.md)"
+    )
 }
 
 /// Paramètres de `constat export`.
@@ -432,8 +523,8 @@ pub struct AnchorArgs<'a> {
     pub keys: Option<&'a Path>,
     /// Organisation, inscrite dans le document d'export.
     pub organization: Option<&'a str>,
-    /// Envoyer la requête RFC 3161 à ce prestataire (URL `http://…`) et
-    /// archiver le jeton délivré à côté du magasin.
+    /// Envoyer la requête RFC 3161 à ce prestataire (URL `http://…` ou
+    /// `https://…`) et archiver le jeton délivré à côté du magasin.
     pub send: Option<&'a str>,
     /// Chemin du magasin — sert à situer le répertoire d'ancrage
     /// (`<magasin>.anchors/`, voir [`crate::anchors`]). Requis avec `send`.
@@ -555,7 +646,7 @@ pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<St
              interne, pas la non-répudiation.\n\
              - `constat anchor --export racine.export` : export de racine signé (niveau 2)\n\
              - `constat anchor --out requete.tsq`     : requête d'horodatage RFC 3161 (niveau 3)\n\
-             - `constat anchor --send http://…`       : envoi direct au prestataire (niveau 3)\n",
+             - `constat anchor --send https://…`      : envoi direct au prestataire (niveau 3)\n",
         );
     }
     Ok(out)

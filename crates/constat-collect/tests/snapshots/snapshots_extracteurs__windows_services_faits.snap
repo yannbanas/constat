@@ -1,0 +1,201 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 146
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "service:Dhcp",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Text(
+            "NT Authority\\LocalService",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Dhcp",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Text(
+            "C:\\Windows\\system32\\svchost.exe -k LocalServiceNetworkRestricted -p",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Dhcp",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "auto",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Fax",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Text(
+            "NT AUTHORITY\\NetworkService",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Fax",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Text(
+            "C:\\Windows\\system32\\fxssvc.exe",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Fax",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "disabled",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Ntfs",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:Ntfs",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:Ntfs",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "boot",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:SauvegardeInterne",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Text(
+            ".\\svc-sauvegarde",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:SauvegardeInterne",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Text(
+            "C:\\Program Files\\SauvegardeInterne\\agent.exe --config C:\\ProgramData\\si\\agent.ini",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:SauvegardeInterne",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "auto",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Spooler",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Text(
+            "LocalSystem",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Spooler",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Text(
+            "C:\\Windows\\System32\\spoolsv.exe",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:Spooler",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "auto",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:W32Time",
+        ),
+        attribute: Attribute(
+            "service.account",
+        ),
+        value: Text(
+            "NT AUTHORITY\\LocalService",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:W32Time",
+        ),
+        attribute: Attribute(
+            "service.image_path",
+        ),
+        value: Text(
+            "C:\\Windows\\system32\\svchost.exe -k LocalService",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:W32Time",
+        ),
+        attribute: Attribute(
+            "service.start_mode",
+        ),
+        value: Text(
+            "manual",
+        ),
+    },
+]

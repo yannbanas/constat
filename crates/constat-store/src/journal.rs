@@ -30,7 +30,7 @@
 use constat_model::{hash_canonical, to_canonical_bytes, BlobHash, ModelError, Timestamp};
 use ed25519_dalek::{Signature, VerifyingKey};
 
-use crate::{JournalEntry, Signer, Store, StoreError};
+use crate::{JournalEntry, JournalId, Signer, Store, StoreError};
 
 /// Octets signables d'une entrée : encodage canonique de l'entrée avec le
 /// champ `signature` **vidé**. C'est sur ces octets que porte la signature
@@ -81,6 +81,37 @@ pub fn append_signed<S: Store + ?Sized>(
     let entry = signer.sign_entry(prev, snapshots, at)?;
     let hash = store.append_entry(&entry)?;
     Ok((hash, entry))
+}
+
+/// Vérifie qu'une entrée est bien signée par la clé du journal `journal` —
+/// la garde structurelle de [`crate::MultiJournalStore::append_entry_in`] :
+/// une clé ne peut jamais écrire dans le journal d'une autre.
+///
+/// Partagée par les deux implémentations ([`crate::MemoryStore`],
+/// [`crate::RedbStore`]) pour que la propriété soit identique partout.
+pub(crate) fn check_journal_signature(
+    journal: &JournalId,
+    entry: &JournalEntry,
+) -> Result<(), StoreError> {
+    let key = VerifyingKey::from_bytes(journal).map_err(|e| {
+        StoreError::Encoding(format!(
+            "identifiant de journal : clé publique Ed25519 invalide : {e}"
+        ))
+    })?;
+    let bytes = signable_bytes(entry).map_err(StoreError::from)?;
+    let signature = Signature::try_from(entry.signature.as_slice()).map_err(|_| {
+        StoreError::ChainBroken(format!(
+            "append refusé : signature malformée ({} octets, 64 attendus)",
+            entry.signature.len()
+        ))
+    })?;
+    key.verify_strict(&bytes, &signature).map_err(|_| {
+        StoreError::ChainBroken(
+            "append refusé : la signature de l'entrée ne vérifie pas avec la clé de ce \
+             journal — une clé ne peut écrire que dans son propre journal"
+                .into(),
+        )
+    })
 }
 
 /// Défaut détecté par [`verify_chain`]. Chaque variante désigne l'index fautif.

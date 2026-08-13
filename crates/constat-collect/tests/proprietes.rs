@@ -13,6 +13,14 @@ use constat_collect::linux::ports::{extract_ports_facts, normalize_kernel_hex_ad
 use constat_collect::linux::sshd::extract_sshd_facts;
 use constat_collect::linux::sudoers::extract_sudoers_facts;
 use constat_collect::linux::systemd::extract_systemd_facts;
+use constat_collect::windows::accounts::extract_accounts_facts as extract_windows_accounts_facts;
+use constat_collect::windows::ad_groups::extract_ad_groups_facts;
+use constat_collect::windows::gpo_security::{
+    decode_inf_text, extract_gpo_security_facts, extract_gpt_tmpl_facts, redact_gpo_capture,
+};
+use constat_collect::windows::password_policy::extract_password_policy_facts;
+use constat_collect::windows::services::extract_services_facts;
+use constat_collect::windows::{format_sid_bytes, parse_ini, sid_rid};
 use constat_collect::{capture, redact, RawCapture};
 use proptest::prelude::*;
 
@@ -146,6 +154,102 @@ proptest! {
     #[test]
     fn sections_ne_paniquent_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
         let _ = capture::split_sections(&s);
+    }
+
+    // -----------------------------------------------------------------------
+    // Collecteurs Windows / Active Directory (S5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_ini_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = parse_ini(&s);
+    }
+
+    #[test]
+    fn extracteur_windows_accounts_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_windows_accounts_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_windows_password_policy_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_password_policy_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_windows_services_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_services_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_ad_groups_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_ad_groups_facts(&s);
+    }
+
+    #[test]
+    fn extracteur_gpo_security_ne_panique_jamais(
+        guid in "\\PC{0,40}",
+        s in "(?:\\PC|[\\n\\t]){0,400}",
+    ) {
+        let _ = extract_gpt_tmpl_facts(&guid, &s);
+        let _ = extract_gpo_security_facts(&s);
+    }
+
+    /// L'expurgation structurelle GPO ne panique jamais, et le corps d'un
+    /// bloc PEM ne lui survit jamais (la protection des lignes de politique
+    /// n'ouvre pas de brèche).
+    #[test]
+    fn expurgation_gpo_ne_panique_jamais_et_pem_jamais_survivant(
+        avant in "(?:\\PC|[\\n]){0,120}",
+        corps in "[A-Za-z0-9+/]{40,120}",
+    ) {
+        let _ = redact_gpo_capture(&avant);
+        let texte = format!(
+            "{avant}\nClearTextPassword = 0\n-----BEGIN RSA PRIVATE KEY-----\n{corps}\n-----END RSA PRIVATE KEY-----\n"
+        );
+        let expurge = redact_gpo_capture(&texte);
+        prop_assert!(!expurge.contains(&corps), "corps PEM survivant : {expurge:?}");
+    }
+
+    /// Le décodage d'un `GptTmpl.inf` (UTF-16LE/BE avec BOM, UTF-8, octets
+    /// arbitraires) ne panique jamais.
+    #[test]
+    fn decode_inf_ne_panique_jamais(b in proptest::collection::vec(any::<u8>(), 0..400)) {
+        let _ = decode_inf_text(&b);
+        // avec BOM forcés, sur les mêmes octets
+        let mut le = vec![0xFF, 0xFE]; le.extend_from_slice(&b);
+        let _ = decode_inf_text(&le);
+        let mut be = vec![0xFE, 0xFF]; be.extend_from_slice(&b);
+        let _ = decode_inf_text(&be);
+    }
+
+    /// Le formateur de SID binaire ne panique jamais, et tout SID bien formé
+    /// fait l'aller-retour texte → RID.
+    #[test]
+    fn format_sid_ne_panique_jamais(b in proptest::collection::vec(any::<u8>(), 0..80)) {
+        if let Some(texte) = format_sid_bytes(&b) {
+            // un SID sans sous-autorité rend l'autorité comme dernière
+            // composante : sid_rid est alors l'autorité, jamais une panique
+            let _ = sid_rid(&texte);
+        }
+    }
+
+    /// Un SID construit (révision, autorité, sous-autorités) est toujours
+    /// formaté, et son RID est la dernière sous-autorité.
+    #[test]
+    fn sid_bien_forme_toujours_formate(
+        revision in 1u8..3,
+        authority in 0u8..12,
+        subs in proptest::collection::vec(any::<u32>(), 1..8),
+    ) {
+        let mut bytes = vec![revision, subs.len() as u8, 0, 0, 0, 0, 0, authority];
+        for s in &subs {
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+        let texte = format_sid_bytes(&bytes);
+        prop_assert!(texte.is_some());
+        if let Some(texte) = texte {
+            prop_assert_eq!(sid_rid(&texte), Some(u64::from(subs[subs.len() - 1])));
+        }
     }
 
     #[test]

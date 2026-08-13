@@ -1,6 +1,11 @@
 //! Export du magasin vers un répertoire — le format que `constat-verify`
 //! consomme en autonome, sans dépendre de Constat (§10.3).
 //!
+//! Deux exporteurs, un seul format : [`export_store`] exporte le journal par
+//! défaut, [`export_journal`] exporte un journal nommé (multi-agents, §13 S8).
+//! Dans les deux cas : **un export = un journal d'un signataire**, layout
+//! normatif identique.
+//!
 //! # Layout — CONTRAT NORMATIF
 //!
 //! Le document normatif est `crates/constat-verify/FORMAT.md` : c'est lui
@@ -38,10 +43,10 @@
 use std::fs;
 use std::path::Path;
 
-use constat_model::to_canonical_bytes;
+use constat_model::{to_canonical_bytes, BlobHash};
 use ed25519_dalek::VerifyingKey;
 
-use crate::{Store, StoreError};
+use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};
 
 /// Nom du fichier contenant la clé publique Ed25519 (32 octets bruts).
 pub const PUBKEY_FILE: &str = "pubkey.bin";
@@ -82,15 +87,48 @@ pub fn export_store<S: Store + ?Sized>(
     dir: &Path,
     public_key: &VerifyingKey,
 ) -> Result<(), StoreError> {
+    let entries = store.entries()?;
+    export_entries(store, dir, public_key.as_bytes(), &entries)
+}
+
+/// Exporte **un journal nommé** vers `dir`, au même layout normatif
+/// (`FORMAT.md`) que [`export_store`] : un export = un journal d'un
+/// signataire, `pubkey.bin` = la clé du journal ([`JournalId`]).
+///
+/// Un serveur multi-agents exporte ainsi N répertoires — un par clé — chacun
+/// vérifiable indépendamment par `constat-verify`. La clôture exportée est
+/// celle de **ce** journal uniquement (ses entrées → leurs snapshots → leurs
+/// blobs) ; les objets partagés avec d'autres journaux sont recopiés dans
+/// chaque export concerné, puisque chaque répertoire doit se suffire.
+///
+/// [`export_store`] reste l'export du journal par défaut — sémantique
+/// inchangée. Mêmes règles d'échec que lui (objet manquant, entrée
+/// résiduelle d'un export plus long).
+pub fn export_journal<S: MultiJournalStore + ?Sized>(
+    store: &S,
+    dir: &Path,
+    journal_id: &JournalId,
+) -> Result<(), StoreError> {
+    let entries = store.entries_of(journal_id)?;
+    export_entries(store, dir, journal_id, &entries)
+}
+
+/// Cœur commun des deux exports : écrit `pubkey.bin` (32 octets bruts) puis
+/// la clôture de la chaîne `entries` (entrées → snapshots → blobs), au
+/// layout normatif du module.
+fn export_entries<S: Store + ?Sized>(
+    store: &S,
+    dir: &Path,
+    public_key: &[u8; 32],
+    entries: &[(BlobHash, JournalEntry)],
+) -> Result<(), StoreError> {
     let snapshots_dir = dir.join(SNAPSHOTS_DIR);
     let blobs_dir = dir.join(BLOBS_DIR);
     for d in [dir, &snapshots_dir, &blobs_dir] {
         fs::create_dir_all(d).map_err(|e| io_err("création des répertoires", e))?;
     }
 
-    fs::write(dir.join(PUBKEY_FILE), public_key.as_bytes()).map_err(|e| io_err(PUBKEY_FILE, e))?;
-
-    let entries = store.entries()?;
+    fs::write(dir.join(PUBKEY_FILE), public_key).map_err(|e| io_err(PUBKEY_FILE, e))?;
 
     for (index, (_hash, entry)) in entries.iter().enumerate() {
         // Entrée complète, signature incluse : blake3(fichier) est l'empreinte

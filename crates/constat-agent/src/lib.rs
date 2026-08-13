@@ -19,7 +19,10 @@
 //!   écriture dans le magasin — le serveur ne reçoit jamais autre chose que
 //!   la forme expurgée.
 
+pub mod install;
 pub mod keys;
 pub mod push;
 pub mod run;
+pub mod schedule;
+pub mod status;
 pub mod storeopen;

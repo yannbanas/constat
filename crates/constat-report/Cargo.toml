@@ -18,6 +18,10 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+# Rétrocompatibilité serde du dossier : aller-retour sur l'encodage CBOR
+# canonique du produit (§15), y compris un dossier d'avant l'introduction
+# de la table de correspondance.
+ciborium = { workspace = true }
 
 [lints]
 workspace = true

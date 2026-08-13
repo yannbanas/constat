@@ -1,0 +1,219 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 164
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.ClearTextPassword",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.EnableGuestAccount",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.LSAAnonymousNameLookup",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.LockoutBadCount",
+        ),
+        value: Int(
+            5,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.LockoutDuration",
+        ),
+        value: Int(
+            30,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.MaximumPasswordAge",
+        ),
+        value: Int(
+            42,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.MinimumPasswordAge",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.MinimumPasswordLength",
+        ),
+        value: Int(
+            12,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.NewAdministratorName",
+        ),
+        value: Text(
+            "AdminExemple",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.PasswordComplexity",
+        ),
+        value: Int(
+            1,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.PasswordHistorySize",
+        ),
+        value: Int(
+            24,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.RequireLogonToChangePassword",
+        ),
+        value: Int(
+            0,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.ResetLockoutCount",
+        ),
+        value: Int(
+            30,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.privilege.SeBackupPrivilege",
+        ),
+        value: List(
+            [
+                Text(
+                    "*S-1-5-32-544",
+                ),
+                Text(
+                    "*S-1-5-32-551",
+                ),
+                Text(
+                    "EXEMPLE\\svc-sauvegarde",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.privilege.SeDebugPrivilege",
+        ),
+        value: List(
+            [
+                Text(
+                    "*S-1-5-32-544",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.privilege.SeDenyNetworkLogonRight",
+        ),
+        value: List(
+            [
+                Text(
+                    "*S-1-5-32-546",
+                ),
+            ],
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "gpo:{31B2F340-016D-11D2-945F-00C04FB984F9}",
+        ),
+        attribute: Attribute(
+            "gpo.privilege.SeRemoteInteractiveLogonRight",
+        ),
+        value: List(
+            [
+                Text(
+                    "*S-1-5-32-544",
+                ),
+                Text(
+                    "*S-1-5-32-555",
+                ),
+            ],
+        ),
+    },
+]

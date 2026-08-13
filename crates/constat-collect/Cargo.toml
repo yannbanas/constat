@@ -18,5 +18,29 @@ blake3 = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 
-[lints]
-workspace = true
+# Collecteurs Windows/AD (S5) : appels FFI Win32 en LECTURE SEULE via les
+# bibliothèques netapi32/advapi32. Version explicite (§17). Aucun client LDAP
+# lourd, aucun runtime asynchrone : seulement les bindings système bruts,
+# et uniquement les familles d'API strictement nécessaires (features ciblées).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Networking_ActiveDirectory",
+    "Win32_Security",
+] }
+
+# Ce crate n'est PAS un crate de cœur pur (§8) : il fait des entrées-sorties.
+# Les collecteurs Windows exigent des appels FFI Win32, donc du code `unsafe`.
+# Le workspace impose `unsafe_code = "forbid"`, qu'un `#[allow]` local NE PEUT
+# PAS lever (c'est la nature de `forbid`). On rétablit donc les lints ici en
+# abaissant ce seul point à `deny` : chaque bloc `unsafe` reste alors
+# explicitement autorisé et justifié par un commentaire `SAFETY`, tandis que
+# tout le reste du crate (extracteurs purs inclus) demeure sans `unsafe`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"

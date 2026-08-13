@@ -25,26 +25,42 @@
 //! est simplement ignoré.
 //!
 //! À la réception, [`StoreReceiver`] :
-//! 1. recalcule l'empreinte de chaque objet du lot — une empreinte annoncée
+//! 1. vérifie que la clé de l'agent est **autorisée** ([`AgentPolicy`]) —
+//!    clé absente d'une allowlist = refus avant toute écriture ;
+//! 2. recalcule l'empreinte de chaque objet du lot — une empreinte annoncée
 //!    (snapshot → blob, entrée → snapshot) qui ne se recalcule pas à
 //!    l'identique est refusée : un objet altéré en vol ne rentre pas ;
-//! 2. exige un **graphe fermé** : chaque blob du lot est référencé par un
+//! 3. exige un **graphe fermé** : chaque blob du lot est référencé par un
 //!    snapshot du lot, chaque snapshot par une entrée — un objet que rien
 //!    n'annonce (l'autre visage de l'altération en vol) est refusé aussi ;
-//! 3. vérifie que chaque entrée de journal est signée par la clé publique
-//!    annoncée, et que la chaîne `prev` se raccorde à ce qui est déjà stocké ;
-//! 4. valide **tout** le lot avant d'écrire quoi que ce soit : un lot refusé
+//! 4. vérifie que chaque entrée de journal est signée par la clé publique
+//!    annoncée, et que la chaîne `prev` se raccorde au **journal de cette
+//!    clé** déjà stocké ;
+//! 5. valide **tout** le lot avant d'écrire quoi que ce soit : un lot refusé
 //!    ne laisse aucune écriture partielle, et l'agent peut le repousser tel
 //!    quel une fois la cause corrigée (idempotence).
+//!
+//! # Multi-agents : un journal par clé (§13 S8)
+//!
+//! Chaque agent a sa clé Ed25519 et sa propre chaîne `prev`. Le lot est donc
+//! rangé dans le **journal nommé de sa clé** (`agent_public_key`, voir
+//! [`constat_store::MultiJournalStore`]) : deux agents peuvent pousser en
+//! entrelacé sans se marcher dessus, chaque chaîne restant vérifiable
+//! indépendamment. Une clé ne peut jamais écrire dans le journal d'une autre :
+//! chaque entrée est vérifiée contre la clé annoncée ici, et le magasin
+//! lui-même revérifie la signature à l'append — propriété structurelle,
+//! pas une politique.
 //!
 //! La couche transport (mTLS + HTTP) est dans [`crate::serve`] ; elle remet
 //! le lot décodé à cette interface, qui reste ainsi testable sans réseau.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use constat_model::{blob_hash, snapshot_hash, Blob, BlobHash, Snapshot};
 use constat_store::{
-    entry_hash, signable_bytes, JournalEntry, Signature, Store, StoreError, VerifyingKey,
+    entry_hash, signable_bytes, JournalEntry, JournalId, MultiJournalStore, Signature, StoreError,
+    VerifyingKey,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +80,7 @@ pub struct PushBatch {
     pub entries: Vec<JournalEntry>,
 }
 
-/// Accusé de réception. Des compteurs et une empreinte, rien d'autre :
+/// Accusé de réception. Des compteurs et des empreintes, rien d'autre :
 /// aucune instruction ne peut transiter vers l'agent par ce type (§17).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
@@ -75,11 +91,21 @@ pub struct Receipt {
     /// Empreinte de la dernière entrée connue côté serveur pour cet agent —
     /// permet à l'agent de savoir où reprendre après une coupure.
     pub last_entry: Option<BlobHash>,
+    /// Racine du **journal de cette clé** après réception (empreinte de sa
+    /// dernière entrée, celle qu'on ancre §6.3). Identique à `last_entry` —
+    /// champ explicite pour l'inventaire multi-agents. Toujours rien
+    /// d'exécutable.
+    pub journal_root: Option<BlobHash>,
 }
 
 /// Erreurs de réception.
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
+    /// La clé publique de l'agent n'est pas dans la liste des agents
+    /// autorisés ([`AgentPolicy::Allowlist`]) : refus **avant toute
+    /// écriture** — la couche transport répond `403`.
+    #[error("agent non autorisé : clé {0} absente de la liste des agents autorisés")]
+    Forbidden(String),
     /// Une signature d'entrée ne correspond pas à la clé annoncée.
     #[error("signature d'entrée invalide : {0}")]
     BadSignature(String),
@@ -99,6 +125,87 @@ pub enum ReceiveError {
     Store(#[from] constat_store::StoreError),
 }
 
+/// Erreurs de lecture de la liste des agents autorisés.
+#[derive(Debug, thiserror::Error, miette::Diagnostic)]
+pub enum PolicyError {
+    /// Le fichier n'a pas pu être lu.
+    #[error("liste d'agents autorisés illisible ({path}) : {detail}")]
+    #[diagnostic(help(
+        "--allowed-agents attend un fichier texte : une clé publique Ed25519 \
+         en hexadécimal (64 caractères) par ligne, commentaires avec #"
+    ))]
+    Unreadable { path: String, detail: String },
+    /// Une ligne n'est pas une clé publique hexadécimale de 64 caractères.
+    #[error(
+        "liste d'agents autorisés ({path}), ligne {line} : « {text} » n'est pas \
+         une clé publique hexadécimale de 64 caractères"
+    )]
+    BadKey {
+        path: String,
+        line: usize,
+        text: String,
+    },
+}
+
+/// Qui a le droit de pousser — décidé **avant toute écriture**.
+///
+/// - [`AgentPolicy::Tofu`] (défaut, sans `--allowed-agents`) :
+///   premier-arrivé-enregistré — toute clé peut créer *son* journal. La
+///   confiance est posée à la première poussée, mais chaque clé reste
+///   ensuite verrouillée sur son propre journal : une clé ne peut jamais
+///   écrire dans le journal d'une autre (propriété structurelle du magasin,
+///   voir [`constat_store::MultiJournalStore::append_entry_in`]).
+/// - [`AgentPolicy::Allowlist`] (avec `--allowed-agents <fichier>`) : seules
+///   les clés listées peuvent pousser ; clé absente = `403`, refusé avant
+///   toute écriture.
+#[derive(Debug, Clone, Default)]
+pub enum AgentPolicy {
+    /// Premier-arrivé-enregistré : toute clé peut créer son journal.
+    #[default]
+    Tofu,
+    /// Seules les clés listées peuvent pousser.
+    Allowlist(BTreeSet<JournalId>),
+}
+
+impl AgentPolicy {
+    /// La clé `key` a-t-elle le droit de pousser ?
+    pub fn allows(&self, key: &JournalId) -> bool {
+        match self {
+            AgentPolicy::Tofu => true,
+            AgentPolicy::Allowlist(keys) => keys.contains(key),
+        }
+    }
+
+    /// Charge une allowlist depuis un fichier texte : une clé publique
+    /// Ed25519 en hexadécimal (64 caractères) par ligne ; lignes vides et
+    /// commentaires `#` (pleine ligne ou fin de ligne) ignorés.
+    ///
+    /// Un fichier vide produit une allowlist vide : **tout** agent est
+    /// refusé — c'est voulu, une liste explicite ne s'improvise pas.
+    pub fn from_allowlist_file(path: &Path) -> Result<Self, PolicyError> {
+        let text = std::fs::read_to_string(path).map_err(|e| PolicyError::Unreadable {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+        let mut keys = BTreeSet::new();
+        for (index, raw) in text.lines().enumerate() {
+            let line = raw.split('#').next().unwrap_or_default().trim();
+            if line.is_empty() {
+                continue;
+            }
+            let bad = || PolicyError::BadKey {
+                path: path.display().to_string(),
+                line: index + 1,
+                text: line.to_string(),
+            };
+            let bytes = hex::decode(line).map_err(|_| bad())?;
+            let key: JournalId = bytes.try_into().map_err(|_| bad())?;
+            keys.insert(key);
+        }
+        Ok(AgentPolicy::Allowlist(keys))
+    }
+}
+
 /// Ce que fait le serveur d'un lot accepté par la couche mTLS.
 ///
 /// La couche transport (rustls) authentifie l'agent par son certificat
@@ -111,21 +218,32 @@ pub trait Receiver {
 
 /// Implémentation de [`Receiver`] sur un magasin `constat-store`.
 ///
-/// Valide tout le lot (empreintes recalculées, signatures, chaînage) avant
-/// la moindre écriture : un lot refusé ne modifie pas le magasin.
+/// Valide tout le lot (autorisation, empreintes recalculées, signatures,
+/// chaînage) avant la moindre écriture : un lot refusé ne modifie pas le
+/// magasin.
 ///
-/// **Limite assumée** : le magasin sous-jacent porte *un* journal — le
-/// serveur actuel range donc les poussées d'*un* agent par magasin. Le
-/// multi-agents (un journal par clé publique) viendra avec l'évolution du
-/// trait `Store`, sans changer ce contrat de validation.
+/// Multi-agents : le lot est rangé dans le **journal nommé de la clé**
+/// `agent_public_key` ([`MultiJournalStore`]) — un journal par agent, le
+/// journal par défaut du magasin restant intact.
 pub struct StoreReceiver<'a> {
-    store: &'a mut dyn Store,
+    store: &'a mut dyn MultiJournalStore,
+    policy: AgentPolicy,
 }
 
 impl<'a> StoreReceiver<'a> {
-    /// Enveloppe un magasin ouvert en écriture.
-    pub fn new(store: &'a mut dyn Store) -> Self {
-        Self { store }
+    /// Enveloppe un magasin ouvert en écriture, en mode
+    /// premier-arrivé-enregistré ([`AgentPolicy::Tofu`]).
+    pub fn new(store: &'a mut dyn MultiJournalStore) -> Self {
+        Self {
+            store,
+            policy: AgentPolicy::Tofu,
+        }
+    }
+
+    /// Enveloppe un magasin ouvert en écriture, avec la politique
+    /// d'autorisation donnée.
+    pub fn with_policy(store: &'a mut dyn MultiJournalStore, policy: AgentPolicy) -> Self {
+        Self { store, policy }
     }
 
     /// L'empreinte `hash` désigne-t-elle un snapshot déjà stocké ?
@@ -141,6 +259,14 @@ impl<'a> StoreReceiver<'a> {
 
 impl Receiver for StoreReceiver<'_> {
     fn receive(&mut self, batch: PushBatch) -> Result<Receipt, ReceiveError> {
+        // ------------------------------------------------------------------
+        // Phase 0 — autorisation, avant toute écriture (et avant tout
+        // travail) : clé absente d'une allowlist = 403.
+        // ------------------------------------------------------------------
+        let journal: JournalId = batch.agent_public_key;
+        if !self.policy.allows(&journal) {
+            return Err(ReceiveError::Forbidden(hex::encode(journal)));
+        }
         let key = VerifyingKey::from_bytes(&batch.agent_public_key).map_err(|e| {
             ReceiveError::BadSignature(format!("clé publique d'agent invalide : {e}"))
         })?;
@@ -225,15 +351,16 @@ impl Receiver for StoreReceiver<'_> {
         }
 
         // Entrées : signature vérifiée avec la clé annoncée, références de
-        // snapshots résolubles, chaîne `prev` raccordée à l'existant. Les
-        // entrées déjà stockées (rejeu idempotent) sont simplement admises.
+        // snapshots résolubles, chaîne `prev` raccordée au journal de CETTE
+        // clé (les autres journaux ne sont ni lus ni touchés). Les entrées
+        // déjà stockées dans ce journal (rejeu idempotent) sont admises.
         let existing: BTreeSet<BlobHash> = self
             .store
-            .entries()?
+            .entries_of(&journal)?
             .iter()
             .map(|(hash, _)| *hash)
             .collect();
-        let mut last = self.store.last_entry()?.map(|(hash, _)| hash);
+        let mut last = self.store.last_entry_of(&journal)?.map(|(hash, _)| hash);
         let mut new_entries: Vec<&JournalEntry> = Vec::new();
         for (index, entry) in batch.entries.iter().enumerate() {
             let hash = entry_hash(entry).map_err(StoreError::from)?;
@@ -262,8 +389,8 @@ impl Receiver for StoreReceiver<'_> {
             })?;
             if entry.prev != last {
                 return Err(ReceiveError::ChainMismatch(format!(
-                    "entrée {index} : `prev` = {} mais la dernière entrée connue est {} — \
-                     troncature ou réécriture, à consigner",
+                    "entrée {index} : `prev` = {} mais la dernière entrée connue du journal \
+                     de cette clé est {} — troncature ou réécriture, à consigner",
                     entry
                         .prev
                         .map(|h| h.to_hex())
@@ -276,8 +403,10 @@ impl Receiver for StoreReceiver<'_> {
         }
 
         // ------------------------------------------------------------------
-        // Phase 2 — écriture. Le lot entier est valide ; l'adressage par
-        // contenu rend chaque écriture idempotente.
+        // Phase 2 — écriture, dans le journal de CETTE clé. Le lot entier
+        // est valide ; l'adressage par contenu rend chaque écriture
+        // idempotente, et `append_entry_in` revérifie structurellement que
+        // chaque entrée est signée par la clé du journal.
         // ------------------------------------------------------------------
         for blob in &batch.blobs {
             self.store.put_blob(blob)?;
@@ -286,14 +415,16 @@ impl Receiver for StoreReceiver<'_> {
             self.store.put_snapshot(snapshot)?;
         }
         for entry in new_entries {
-            self.store.append_entry(entry)?;
+            self.store.append_entry_in(&journal, entry)?;
         }
 
+        let root = self.store.root_of(&journal)?;
         Ok(Receipt {
             accepted_blobs: batch.blobs.len(),
             accepted_snapshots: batch.snapshots.len(),
             accepted_entries: batch.entries.len(),
-            last_entry: self.store.root()?,
+            last_entry: root,
+            journal_root: root,
         })
     }
 }
@@ -303,30 +434,29 @@ impl Receiver for StoreReceiver<'_> {
 mod tests {
     use super::*;
     use constat_model::{Fact, Snapshot, Timestamp};
-    use constat_store::{append_signed, verify_chain, MemoryStore, Signer};
+    use constat_store::{append_signed, verify_chain, MemoryStore, Signer, Store};
     use std::collections::BTreeMap;
 
-    /// Construit un magasin d'agent avec `n` collectes journalisées, et le
-    /// lot correspondant.
-    fn agent_batch(n: usize) -> (Signer, PushBatch) {
+    /// Construit un magasin d'agent avec `n` collectes journalisées par
+    /// `signer` (le contenu varie avec `asset`), et le lot correspondant.
+    fn batch_of(signer: &Signer, asset: &str, n: usize) -> PushBatch {
         let mut store = MemoryStore::new();
-        let signer = Signer::generate();
         let mut all_blobs = Vec::new();
         let mut all_snapshots = Vec::new();
         for i in 0..n {
             let blob = Blob::new(
                 "linux.sshd",
-                format!("PermitRootLogin no # v{i}\n").into_bytes(),
+                format!("PermitRootLogin no # {asset} v{i}\n").into_bytes(),
                 vec![Fact::new("service:sshd", "sshd.PermitRootLogin", "no")],
             );
             let hash = store.put_blob(&blob).unwrap();
             let mut blobs = BTreeMap::new();
             blobs.insert("linux.sshd".into(), hash);
-            let snapshot = Snapshot::new("srv-01", Timestamp(1_000 + i as i64), blobs);
+            let snapshot = Snapshot::new(asset, Timestamp(1_000 + i as i64), blobs);
             let snapshot_hash = store.put_snapshot(&snapshot).unwrap();
             append_signed(
                 &mut store,
-                &signer,
+                signer,
                 vec![snapshot_hash],
                 Timestamp(1_000 + i as i64),
             )
@@ -340,43 +470,173 @@ mod tests {
             .into_iter()
             .map(|(_, e)| e)
             .collect();
-        let batch = PushBatch {
+        PushBatch {
             agent_public_key: signer.verifying_key().to_bytes(),
-            asset: "srv-01".into(),
+            asset: asset.into(),
             blobs: all_blobs,
             snapshots: all_snapshots,
             entries,
-        };
+        }
+    }
+
+    fn agent_batch(n: usize) -> (Signer, PushBatch) {
+        let signer = Signer::generate();
+        let batch = batch_of(&signer, "srv-01", n);
         (signer, batch)
     }
 
     #[test]
     fn reception_puis_verification_de_chaine() {
         let (signer, batch) = agent_batch(2);
+        let journal = signer.verifying_key().to_bytes();
         let mut store = MemoryStore::new();
         let receipt = StoreReceiver::new(&mut store).receive(batch).unwrap();
         assert_eq!(receipt.accepted_entries, 2);
-        assert_eq!(store.entry_count(), 2);
-        // La chaîne reçue se vérifie avec la clé publique de l'agent.
-        verify_chain(&store.entries().unwrap(), &signer.verifying_key()).unwrap();
-        assert_eq!(receipt.last_entry, store.root().unwrap());
+        // Le lot est rangé dans le journal de la clé de l'agent…
+        let entries = store.entries_of(&journal).unwrap();
+        assert_eq!(entries.len(), 2);
+        verify_chain(&entries, &signer.verifying_key()).unwrap();
+        assert_eq!(receipt.last_entry, store.root_of(&journal).unwrap());
+        assert_eq!(receipt.journal_root, receipt.last_entry);
+        // …et le journal par défaut du magasin n'est pas touché.
+        assert_eq!(store.entry_count(), 0);
+        assert_eq!(store.root().unwrap(), None);
     }
 
     /// Re-pousser exactement le même lot est un non-événement.
     #[test]
     fn double_poussee_idempotente() {
-        let (_, batch) = agent_batch(2);
+        let (signer, batch) = agent_batch(2);
+        let journal = signer.verifying_key().to_bytes();
         let mut store = MemoryStore::new();
         StoreReceiver::new(&mut store)
             .receive(batch.clone())
             .unwrap();
-        let root = store.root().unwrap();
+        let root = store.root_of(&journal).unwrap();
         let receipt = StoreReceiver::new(&mut store).receive(batch).unwrap();
-        assert_eq!(store.entry_count(), 2);
+        assert_eq!(store.entries_of(&journal).unwrap().len(), 2);
         assert_eq!(store.blob_count(), 2);
-        assert_eq!(store.root().unwrap(), root);
+        assert_eq!(store.root_of(&journal).unwrap(), root);
         // Les doublons idempotents comptent comme acceptés.
         assert_eq!(receipt.accepted_entries, 2);
+    }
+
+    /// Deux agents qui poussent en entrelacé : deux journaux, deux chaînes
+    /// intactes, vérifiables indépendamment — personne ne se marche dessus.
+    #[test]
+    fn deux_agents_entrelaces() {
+        let a = Signer::generate();
+        let b = Signer::generate();
+        let journal_a = a.verifying_key().to_bytes();
+        let journal_b = b.verifying_key().to_bytes();
+        let mut store = MemoryStore::new();
+
+        // Entrelacement : A pousse 1 collecte, B pousse 1, A repousse tout
+        // (2 collectes, la première en rejeu idempotent), B aussi.
+        StoreReceiver::new(&mut store)
+            .receive(batch_of(&a, "srv-a", 1))
+            .unwrap();
+        StoreReceiver::new(&mut store)
+            .receive(batch_of(&b, "srv-b", 1))
+            .unwrap();
+        let receipt_a = StoreReceiver::new(&mut store)
+            .receive(batch_of(&a, "srv-a", 2))
+            .unwrap();
+        let receipt_b = StoreReceiver::new(&mut store)
+            .receive(batch_of(&b, "srv-b", 3))
+            .unwrap();
+
+        let entries_a = store.entries_of(&journal_a).unwrap();
+        let entries_b = store.entries_of(&journal_b).unwrap();
+        assert_eq!(entries_a.len(), 2);
+        assert_eq!(entries_b.len(), 3);
+        verify_chain(&entries_a, &a.verifying_key()).unwrap();
+        verify_chain(&entries_b, &b.verifying_key()).unwrap();
+        assert_eq!(receipt_a.journal_root, store.root_of(&journal_a).unwrap());
+        assert_eq!(receipt_b.journal_root, store.root_of(&journal_b).unwrap());
+        assert_ne!(receipt_a.journal_root, receipt_b.journal_root);
+        assert_eq!(store.journals().unwrap().len(), 2);
+    }
+
+    /// Une clé qui rejoue une entrée du journal d'une autre : refusée —
+    /// l'entrée est signée par l'autre clé, elle ne peut pas entrer dans ce
+    /// journal. Une clé ne peut jamais écrire dans le journal d'une autre.
+    #[test]
+    fn rejeu_d_une_entree_d_un_autre_agent_refuse() {
+        let a = Signer::generate();
+        let b = Signer::generate();
+        let journal_b = b.verifying_key().to_bytes();
+        let mut store = MemoryStore::new();
+        let batch_b = batch_of(&b, "srv-b", 1);
+        StoreReceiver::new(&mut store)
+            .receive(batch_b.clone())
+            .unwrap();
+        let root_b = store.root_of(&journal_b).unwrap();
+
+        // A annonce SA clé mais rejoue les objets de B (snapshots et blobs
+        // déjà connus du magasin, entrée signée par B).
+        let vol = PushBatch {
+            agent_public_key: a.verifying_key().to_bytes(),
+            asset: "srv-b".into(),
+            blobs: vec![],
+            snapshots: vec![],
+            entries: batch_b.entries.clone(),
+        };
+        let err = StoreReceiver::new(&mut store).receive(vol).unwrap_err();
+        assert!(matches!(err, ReceiveError::BadSignature(_)), "{err}");
+        // Rien n'a bougé : ni journal pour A, ni écriture chez B.
+        assert_eq!(store.journals().unwrap().len(), 1);
+        assert_eq!(store.root_of(&journal_b).unwrap(), root_b);
+    }
+
+    /// Allowlist : une clé absente de la liste est refusée AVANT toute
+    /// écriture ; une clé listée passe.
+    #[test]
+    fn allowlist_refuse_avant_toute_ecriture() {
+        let a = Signer::generate();
+        let b = Signer::generate();
+        let policy = AgentPolicy::Allowlist(BTreeSet::from([a.verifying_key().to_bytes()]));
+        let mut store = MemoryStore::new();
+
+        let err = StoreReceiver::with_policy(&mut store, policy.clone())
+            .receive(batch_of(&b, "srv-b", 1))
+            .unwrap_err();
+        assert!(matches!(err, ReceiveError::Forbidden(_)), "{err}");
+        assert_eq!(store.blob_count(), 0);
+        assert!(store.journals().unwrap().is_empty());
+
+        StoreReceiver::with_policy(&mut store, policy)
+            .receive(batch_of(&a, "srv-a", 1))
+            .unwrap();
+        assert_eq!(store.journals().unwrap().len(), 1);
+    }
+
+    /// L'allowlist se charge depuis un fichier : hex, une clé par ligne,
+    /// commentaires `#`, lignes vides ignorées, ligne invalide = erreur.
+    #[test]
+    fn allowlist_depuis_fichier() {
+        let a = Signer::generate();
+        let dir = std::env::temp_dir().join(format!("constat-allow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agents.txt");
+        std::fs::write(
+            &path,
+            format!(
+                "# agents autorisés\n\n{} # agent A\n",
+                hex::encode(a.verifying_key().to_bytes())
+            ),
+        )
+        .unwrap();
+        let policy = AgentPolicy::from_allowlist_file(&path).unwrap();
+        assert!(policy.allows(&a.verifying_key().to_bytes()));
+        assert!(!policy.allows(&[0u8; 32]));
+
+        std::fs::write(&path, "pas-une-clé\n").unwrap();
+        assert!(matches!(
+            AgentPolicy::from_allowlist_file(&path),
+            Err(PolicyError::BadKey { line: 1, .. })
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Un blob altéré en vol : son empreinte recalculée ne correspond plus à
@@ -384,13 +644,16 @@ mod tests {
     /// et aucune écriture partielle.
     #[test]
     fn blob_altere_refuse_sans_ecriture() {
-        let (_, mut batch) = agent_batch(1);
+        let (signer, mut batch) = agent_batch(1);
         batch.blobs[0].raw.push(b'!');
         let mut store = MemoryStore::new();
         let err = StoreReceiver::new(&mut store).receive(batch).unwrap_err();
         assert!(matches!(err, ReceiveError::DanglingReference(_)), "{err}");
         assert_eq!(store.blob_count(), 0);
-        assert_eq!(store.entry_count(), 0);
+        assert!(store
+            .entries_of(&signer.verifying_key().to_bytes())
+            .unwrap()
+            .is_empty());
     }
 
     /// Une entrée dont la signature ne vérifie pas avec la clé annoncée est
@@ -404,7 +667,8 @@ mod tests {
         assert!(matches!(err, ReceiveError::BadSignature(_)), "{err}");
     }
 
-    /// Une clé publique annoncée différente de celle qui a signé : refus.
+    /// Une clé publique annoncée différente de celle qui a signé : refus —
+    /// les entrées iraient dans le journal d'une clé qui ne les a pas signées.
     #[test]
     fn cle_annoncee_differente_refusee() {
         let (_, mut batch) = agent_batch(1);
@@ -414,17 +678,26 @@ mod tests {
         assert!(matches!(err, ReceiveError::BadSignature(_)), "{err}");
     }
 
-    /// Une chaîne qui ne se raccorde pas à l'existant (genèse concurrente) :
-    /// refus explicite, jamais de réparation silencieuse.
+    /// Une chaîne qui ne se raccorde pas à l'existant du journal de cette clé
+    /// (genèse concurrente du même signataire) : refus explicite, jamais de
+    /// réparation silencieuse.
     #[test]
     fn chaine_incoherente_refusee() {
-        let (_, first) = agent_batch(1);
-        let (_, second) = agent_batch(1); // autre signer → autre genèse
+        let signer = Signer::generate();
+        let first = batch_of(&signer, "srv-01", 1);
+        // Même clé, autre magasin local : autre genèse — une réécriture.
+        let second = batch_of(&signer, "srv-fork", 1);
         let mut store = MemoryStore::new();
         StoreReceiver::new(&mut store).receive(first).unwrap();
         let err = StoreReceiver::new(&mut store).receive(second).unwrap_err();
         assert!(matches!(err, ReceiveError::ChainMismatch(_)), "{err}");
-        assert_eq!(store.entry_count(), 1);
+        assert_eq!(
+            store
+                .entries_of(&signer.verifying_key().to_bytes())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// Un blob que rien ne référence dans le lot — l'autre visage de

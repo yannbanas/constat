@@ -1,0 +1,33 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+assertion_line: 145
+expression: redacted
+---
+# capture windows.services anonymisée (HKLM\SYSTEM\CurrentControlSet\Services)
+[Dhcp]
+start = 2
+object_name = NT Authority\LocalService
+image_path = C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p
+
+[Fax]
+start = 4
+object_name = NT AUTHORITY\NetworkService
+image_path = C:\Windows\system32\fxssvc.exe
+
+[Ntfs]
+start = 0
+
+[SauvegardeInterne]
+start = 2
+object_name = .\svc-sauvegarde
+image_path = C:\Program Files\SauvegardeInterne\agent.exe --config C:\ProgramData\si\agent.ini
+
+[Spooler]
+start = 2
+object_name = LocalSystem
+image_path = C:\Windows\System32\spoolsv.exe
+
+[W32Time]
+start = 3
+object_name = NT AUTHORITY\LocalService
+image_path = C:\Windows\system32\svchost.exe -k LocalService

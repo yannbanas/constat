@@ -20,6 +20,11 @@ use constat_collect::linux::ports::{PortsCollector, SECTION_TCP, SECTION_UDP};
 use constat_collect::linux::sshd::SshdCollector;
 use constat_collect::linux::sudoers::SudoersCollector;
 use constat_collect::linux::systemd::{SystemdCollector, SECTION_UNIT_FILES};
+use constat_collect::windows::accounts::AccountsCollector as WindowsAccountsCollector;
+use constat_collect::windows::ad_groups::AdGroupsCollector;
+use constat_collect::windows::gpo_security::{GpoSecurityCollector, SECTION_GPO_PREFIX};
+use constat_collect::windows::password_policy::PasswordPolicyCollector;
+use constat_collect::windows::services::ServicesCollector;
 use constat_collect::{capture, Collector, RawCapture};
 
 // ---------------------------------------------------------------------------
@@ -370,6 +375,163 @@ fn anti_fuite_kernel_params() {
         b64 = SECRET_BASE64,
     );
     assert_pipeline_leak_free(&KernelParamsCollector::default(), &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// windows.accounts — commentaires hostiles dans une capture INI
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_windows_accounts() {
+    let hostile = format!(
+        "[localgroup S-1-5-32-544]\n\
+         name = Administrateurs\n\
+         # note d'un admin : password={p1}\n\
+         \n\
+         [user S-1-5-21-1-500]\n\
+         name = Administrateur\n\
+         enabled = true\n\
+         password_never_expires = true\n\
+         groups = S-1-5-32-544\n\
+         # jeton oublié : token={t}\n\
+         # hachage recopié : $6${salt}${hash}\n\
+         recovery_key={b64}\n\
+         {pem}\n",
+        p1 = SECRET_PASSWORD_1,
+        t = SECRET_TOKEN,
+        salt = SECRET_SHADOW_SHA512_SALT,
+        hash = SECRET_SHADOW_SHA512_HASH,
+        b64 = SECRET_BASE64,
+        pem = fake_pem("RSA PRIVATE KEY", SECRET_PEM_RSA),
+    );
+    assert_pipeline_leak_free(&WindowsAccountsCollector, &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// windows.password_policy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_windows_password_policy() {
+    let hostile = format!(
+        "[password_policy]\n\
+         min_password_length = 8\n\
+         # rappel du mot de passe du compte de secours : passwd: {p2}\n\
+         admin_token = {t}\n\
+         {pem}\n",
+        p2 = SECRET_PASSWORD_2,
+        t = SECRET_TOKEN,
+        pem = fake_pem("EC PRIVATE KEY", SECRET_PEM_EC),
+    );
+    assert_pipeline_leak_free(&PasswordPolicyCollector, &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// windows.services — ImagePath est le point de fuite classique
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_windows_services() {
+    let hostile = format!(
+        "[AppInterne]\n\
+         start = 2\n\
+         object_name = .\\svc-app\n\
+         image_path = C:\\app\\service.exe --user admin --password={p1} --verbose\n\
+         \n\
+         [AutreService]\n\
+         start = 3\n\
+         image_path = C:\\outil.exe --api_key={b64}\n\
+         # cle privee collee dans une valeur : {pem}\n\
+         # jeton : token = {t}\n",
+        p1 = SECRET_PASSWORD_1,
+        b64 = SECRET_BASE64,
+        pem = fake_pem("PRIVATE KEY", SECRET_PEM_RSA),
+        t = SECRET_TOKEN,
+    );
+    assert_pipeline_leak_free(&ServicesCollector, &hostile);
+}
+
+/// La commande d'`image_path` reste utile après expurgation : le chemin
+/// survit, le secret devient un marqueur — dans les faits aussi.
+#[test]
+fn anti_fuite_windows_services_image_path_expurge_dans_les_faits() {
+    let hostile = format!(
+        "[AppInterne]\nstart = 2\nimage_path = C:\\app\\service.exe --password={p1}\n",
+        p1 = SECRET_PASSWORD_1
+    );
+    let collector = ServicesCollector;
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let facts = collector
+        .extract(&redacted)
+        .unwrap_or_else(|e| panic!("extraction en échec : {e}"));
+    let path = facts
+        .iter()
+        .find(|f| f.attribute.0 == "service.image_path")
+        .unwrap_or_else(|| panic!("fait service.image_path manquant"));
+    let debug = format!("{path:?}");
+    assert!(
+        debug.contains("service.exe"),
+        "le chemin doit rester : {debug}"
+    );
+    assert!(
+        debug.contains(constat_collect::redact::MARKER_PASSWORD),
+        "le marqueur doit attester le secret : {debug}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ad.groups
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_ad_groups() {
+    let hostile = format!(
+        "[domain]\n\
+         name = EXEMPLE\n\
+         \n\
+         [group S-1-5-21-1-2-3-512]\n\
+         name = Admins du domaine\n\
+         member = Administrateur\n\
+         # mot de passe du compte de service : password={p1}\n\
+         # hachage : $2b$12${sb}\n\
+         sync_token = {t}\n\
+         {pem}\n",
+        p1 = SECRET_PASSWORD_1,
+        sb = SECRET_SHADOW_BCRYPT,
+        t = SECRET_TOKEN,
+        pem = fake_pem("OPENSSH PRIVATE KEY", SECRET_PEM_OPENSSH),
+    );
+    assert_pipeline_leak_free(&AdGroupsCollector, &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// ad.gpo_security — un GptTmpl.inf hostile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_ad_gpo_security() {
+    let inf = format!(
+        "[System Access]\r\n\
+         MinimumPasswordLength = 8\r\n\
+         ; note laissée dans la GPO : password={p1}\r\n\
+         AutoAdminPassword = {p2}\r\n\
+         [Privilege Rights]\r\n\
+         SeDebugPrivilege = *S-1-5-32-544\r\n\
+         [Registry Values]\r\n\
+         MACHINE\\Software\\Exemple\\ApiToken=1,\"{t}\"\r\n\
+         {pem}\r\n\
+         deploy_key = {b64}\r\n",
+        p1 = SECRET_PASSWORD_1,
+        p2 = SECRET_PASSWORD_2,
+        t = SECRET_TOKEN,
+        pem = fake_pem("RSA PRIVATE KEY", SECRET_PEM_RSA),
+        b64 = SECRET_BASE64,
+    );
+    let hostile = capture::join_sections(&[(
+        &format!("{SECTION_GPO_PREFIX}{{AAAA-HOSTILE}}"),
+        inf.as_str(),
+    )]);
+    assert_pipeline_leak_free(&GpoSecurityCollector, &hostile);
 }
 
 // ---------------------------------------------------------------------------
