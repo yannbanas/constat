@@ -13,6 +13,10 @@ use constat_collect::linux::ports::{extract_ports_facts, normalize_kernel_hex_ad
 use constat_collect::linux::sshd::extract_sshd_facts;
 use constat_collect::linux::sudoers::extract_sudoers_facts;
 use constat_collect::linux::systemd::extract_systemd_facts;
+use constat_collect::network_configs::{
+    detect_format_hint, extract_network_configs_facts, redact_network_configs_capture,
+    sanitize_device_name,
+};
 use constat_collect::windows::accounts::extract_accounts_facts as extract_windows_accounts_facts;
 use constat_collect::windows::ad_groups::extract_ad_groups_facts;
 use constat_collect::windows::gpo_security::{
@@ -154,6 +158,120 @@ proptest! {
     #[test]
     fn sections_ne_paniquent_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
         let _ = capture::split_sections(&s);
+    }
+
+    // -----------------------------------------------------------------------
+    // network.configs (S7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extracteur_network_configs_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = extract_network_configs_facts(&s);
+    }
+
+    #[test]
+    fn expurgation_network_configs_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = redact_network_configs_capture(&s);
+    }
+
+    #[test]
+    fn expurgation_reseau_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = redact::redact_network_config(&s);
+    }
+
+    #[test]
+    fn indice_de_format_ne_panique_jamais(s in "(?:\\PC|[\\n\\t]){0,400}") {
+        let _ = detect_format_hint(&s);
+    }
+
+    /// Le nom assaini ne contient jamais autre chose que `[A-Za-z0-9._-]` :
+    /// il ne peut ni casser le délimiteur de section, ni contenir de secret
+    /// multi-caractères venu du nom de fichier.
+    #[test]
+    fn nom_d_equipement_toujours_assaini(s in "\\PC{0,60}") {
+        let name = sanitize_device_name(&s);
+        prop_assert!(!name.is_empty());
+        prop_assert!(name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'));
+    }
+
+    /// Un blob `ENC` FortiGate généré aléatoirement ne survit jamais, quel
+    /// que soit l'attribut porteur.
+    #[test]
+    fn blob_enc_fortigate_jamais_survivant(
+        attr in "[a-z][a-z0-9-]{0,20}",
+        blob in "[A-Za-z0-9+/]{12,80}(={0,2})",
+    ) {
+        let ligne = format!("    set {attr} ENC {blob}");
+        let expurge = redact::redact_network_config(&ligne);
+        prop_assert!(
+            !expurge.contains(&blob),
+            "blob ENC survivant : {ligne:?} -> {expurge:?}"
+        );
+    }
+
+    /// Une communauté SNMP Cisco générée aléatoirement ne survit jamais ;
+    /// le suffixe (`RO`…) survit, lui.
+    #[test]
+    fn communaute_snmp_jamais_survivante(
+        // le préfixe `Zz` n'apparaît dans aucun marqueur : jamais de fausse
+        // détection d'une « survie » dans le texte expurgé
+        communaute in "Zz[A-Za-z0-9_-]{3,30}",
+        suffixe in prop_oneof![Just("RO"), Just("RW"), Just("RO 10")],
+    ) {
+        let ligne = format!("snmp-server community {communaute} {suffixe}");
+        let expurge = redact::redact_network_config(&ligne);
+        prop_assert!(
+            !expurge.contains(&communaute),
+            "communauté survivante : {ligne:?} -> {expurge:?}"
+        );
+        prop_assert!(expurge.contains(suffixe), "suffixe perdu : {expurge:?}");
+    }
+
+    /// Le contenu d'une balise XML sensible générée aléatoirement ne survit
+    /// jamais, la balise elle-même survit.
+    #[test]
+    fn balise_xml_sensible_jamais_survivante(
+        balise in prop_oneof![
+            Just("password"), Just("apikey"), Just("secret"),
+            Just("authkey"), Just("privkey"), Just("psksecret"),
+        ],
+        valeur in "Zz[A-Za-z0-9+/$.!]{4,58}",
+        indent in "[ ]{0,8}",
+    ) {
+        let ligne = format!("{indent}<{balise}>{valeur}</{balise}>");
+        let expurge = redact::redact_network_config(&ligne);
+        prop_assert!(
+            !expurge.contains(&valeur),
+            "contenu de balise survivant : {ligne:?} -> {expurge:?}"
+        );
+        prop_assert!(
+            expurge.contains(&format!("<{balise}>")) && expurge.contains(&format!("</{balise}>")),
+            "la balise doit survivre : {expurge:?}"
+        );
+    }
+
+    /// `enable secret` et `username … secret` Cisco : la valeur générée ne
+    /// survit jamais.
+    #[test]
+    fn secret_cisco_jamais_survivant(
+        nom in "[a-z][a-z0-9]{0,12}",
+        chiffrage in prop_oneof![Just(""), Just("0 "), Just("5 "), Just("7 "), Just("9 ")],
+        valeur in "Zz[A-Za-z0-9$./]{4,58}",
+    ) {
+        for ligne in [
+            format!("enable secret {chiffrage}{valeur}"),
+            format!("enable password {chiffrage}{valeur}"),
+            format!("username {nom} secret {chiffrage}{valeur}"),
+            format!("username {nom} password {chiffrage}{valeur}"),
+        ] {
+            let expurge = redact::redact_network_config(&ligne);
+            prop_assert!(
+                !expurge.contains(&valeur),
+                "secret cisco survivant : {ligne:?} -> {expurge:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

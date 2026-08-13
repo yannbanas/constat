@@ -1,0 +1,138 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: facts
+---
+[
+    Fact {
+        entity: EntityId(
+            "netdev:fw-dmz-01",
+        ),
+        attribute: Attribute(
+            "netdev.config_lines",
+        ),
+        value: Int(
+            70,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:fw-dmz-01",
+        ),
+        attribute: Attribute(
+            "netdev.config_present",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:fw-dmz-01",
+        ),
+        attribute: Attribute(
+            "netdev.format_hint",
+        ),
+        value: Text(
+            "fortigate",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:fw-opn-03",
+        ),
+        attribute: Attribute(
+            "netdev.config_lines",
+        ),
+        value: Int(
+            73,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:fw-opn-03",
+        ),
+        attribute: Attribute(
+            "netdev.config_present",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:fw-opn-03",
+        ),
+        attribute: Attribute(
+            "netdev.format_hint",
+        ),
+        value: Text(
+            "xml",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:pass-usine-04",
+        ),
+        attribute: Attribute(
+            "netdev.config_lines",
+        ),
+        value: Int(
+            40,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:pass-usine-04",
+        ),
+        attribute: Attribute(
+            "netdev.config_present",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:pass-usine-04",
+        ),
+        attribute: Attribute(
+            "netdev.format_hint",
+        ),
+        value: Text(
+            "nftables",
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:rtr-agence-02",
+        ),
+        attribute: Attribute(
+            "netdev.config_lines",
+        ),
+        value: Int(
+            55,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:rtr-agence-02",
+        ),
+        attribute: Attribute(
+            "netdev.config_present",
+        ),
+        value: Bool(
+            true,
+        ),
+    },
+    Fact {
+        entity: EntityId(
+            "netdev:rtr-agence-02",
+        ),
+        attribute: Attribute(
+            "netdev.format_hint",
+        ),
+        value: Text(
+            "cisco-ios",
+        ),
+    },
+]

@@ -19,6 +19,22 @@ constat-diff = { workspace = true }
 constat-store = { workspace = true }
 constat-report = { workspace = true }
 constat-anchor = { workspace = true }
+# `constat segmentation` re-découpe le blob multi-sections du collecteur
+# network.configs avec le MÊME découpeur que la collecte
+# (constat_collect::capture::split_sections) : un seul format, jamais deux.
+constat-collect = { workspace = true }
+# La jonction avec Calque (§14) : `constat segmentation` évalue les
+# configurations réseau historiques du magasin avec le moteur de Calque —
+# import constructeur (calque-vendors), topologie et préparation moteur
+# (calque-engine), tests de flux (calque-policy), fidélité (calque-model).
+# Épinglées par tag git, exception justifiée dans deny.toml.
+calque-model = { workspace = true }
+calque-engine = { workspace = true }
+calque-policy = { workspace = true }
+calque-vendors = { workspace = true }
+# Empreinte BLAKE3 du fichier de flux, enregistrée dans les faits de
+# `segmentation --record` (même fonction de hachage que tout le magasin).
+blake3 = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 thiserror = { workspace = true }

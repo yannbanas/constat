@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/yannbanas/constat"
@@ -32,6 +32,14 @@ constat-anchor = { path = "crates/constat-anchor" }
 constat-collect = { path = "crates/constat-collect" }
 constat-report = { path = "crates/constat-report" }
 constat-verify = { path = "crates/constat-verify" }
+
+# La jonction avec Calque (§14, S7) : l'évaluation d'accessibilité des
+# configurations réseau historiques. Dépôt de la même organisation, épinglé
+# par tag — l'exception correspondante est justifiée dans deny.toml (§17).
+calque-model = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
+calque-engine = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
+calque-policy = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
+calque-vendors = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
 
 serde = { version = "1", features = ["derive"] }
 ciborium = "0.2"

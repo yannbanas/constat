@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<!-- Configuration fictive et anonyme - fixture de test constat. -->
+<!-- Adressage RFC1918 invente ; secrets FACTICES pour exercer l'expurgation. -->
+<opnsense>
+  <version>23.7.10</version>
+  <system>
+    <hostname>fw-opn-03</hostname>
+    <domain>lab.example</domain>
+    <user>
+      <name>root</name>
+      <password>$2y$10$HachageBcryptFictif0123456789abcdefghij</password>
+      <apikey>CleApiFictive0123456789</apikey>
+      <apisecret>SecretApiFictif0123456789</apisecret>
+    </user>
+    <webgui>
+      <protocol>https</protocol>
+    </webgui>
+  </system>
+  <interfaces>
+    <wan>
+      <if>vtnet0</if>
+      <enable>1</enable>
+      <ipaddr>10.200.0.2</ipaddr>
+      <subnet>30</subnet>
+      <gateway>GW_WAN</gateway>
+    </wan>
+    <lan>
+      <if>vtnet1</if>
+      <enable>1</enable>
+      <ipaddr>10.10.1.1</ipaddr>
+      <subnet>24</subnet>
+    </lan>
+  </interfaces>
+  <filter>
+    <rule uuid="c0a80101-0000-4000-8000-000000000001">
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source>
+        <network>lan</network>
+      </source>
+      <destination>
+        <address>10.10.2.10</address>
+        <port>8443</port>
+      </destination>
+      <descr>postes vers serveur web de la dmz</descr>
+    </rule>
+    <rule uuid="c0a80101-0000-4000-8000-000000000002">
+      <type>block</type>
+      <interface>opt1</interface>
+      <ipprotocol>inet</ipprotocol>
+      <quick>1</quick>
+      <source>
+        <network>opt1</network>
+      </source>
+      <destination>
+        <network>lan</network>
+      </destination>
+      <descr>isolement de la dmz</descr>
+    </rule>
+  </filter>
+  <snmpd>
+    <syslocation>baie A1</syslocation>
+    <rocommunity>communaute-fictive</rocommunity>
+    <authkey>AuthKeyFictive0123456789</authkey>
+    <privkey>PrivKeyFictive0123456789</privkey>
+  </snmpd>
+  <unbound>
+    <enable>1</enable>
+    <dnssec>1</dnssec>
+  </unbound>
+</opnsense>

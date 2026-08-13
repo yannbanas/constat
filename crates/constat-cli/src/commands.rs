@@ -2,10 +2,12 @@
 //!
 //! Chaque commande renvoie le texte à afficher : la logique est ainsi
 //! exerçable par le test de fumée sur un magasin en mémoire, sans processus.
-//! La CLI ne modifie jamais le magasin — lecture seule, comme tout le
-//! produit (§1). Les seules écritures sont **à côté** du magasin : le
-//! répertoire d'export (`constat export`), les fichiers d'ancrage
-//! (`constat anchor`) et le dossier de preuve (`constat pack`).
+//! Aucune commande de ce module ne modifie le magasin — lecture seule,
+//! comme tout le produit (§1). Les seules écritures sont **à côté** du
+//! magasin : le répertoire d'export (`constat export`), les fichiers
+//! d'ancrage (`constat anchor`) et le dossier de preuve (`constat pack`).
+//! L'unique exception de toute la CLI vit dans [`crate::segmentation`] :
+//! `segmentation --record`, qui ajoute une entrée signée au journal (§14).
 
 use std::path::Path;
 

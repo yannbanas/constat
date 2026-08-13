@@ -7,6 +7,7 @@
 //! constat timeline --assertion SSH-ROOT --period 2026-Q1
 //! constat check    --period 2026-Q1 --explain
 //! constat pack     --period 2026-Q1 --referential exemple --out dossier-Q1.html
+//! constat segmentation --flows flows.yaml --at 2026-03-03T14:00
 //! constat anchor   --send https://tsa.exemple.fr/tsr
 //! constat export   --out ./export
 //! constat verify   ./export
@@ -15,7 +16,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use constat_cli::{commands, storeopen};
+use constat_cli::{commands, segmentation, storeopen};
 
 #[derive(Parser)]
 #[command(
@@ -24,7 +25,10 @@ use constat_cli::{commands, storeopen};
     about = "Constat — l'état de votre infrastructure dans la durée, avec preuve.",
     long_about = "Constat enregistre l'état de configuration d'une infrastructure dans la \
                   durée, de façon non falsifiable, et produit la preuve qu'un auditeur \
-                  accepte. Cette CLI interroge le magasin local : elle ne modifie rien, jamais."
+                  accepte. Cette CLI interroge le magasin local : elle ne modifie rien, \
+                  jamais — à l'exception de `segmentation --record`, qui ajoute des faits \
+                  signés au journal (le verdict d'accessibilité est un constat comme un \
+                  autre, §14)."
 )]
 struct Cli {
     /// Chemin du magasin (sinon variable CONSTAT_STORE, sinon ./constat.redb)
@@ -142,6 +146,33 @@ enum Command {
         #[arg(long)]
         organization: Option<String>,
     },
+    /// Preuve de segmentation : évalue les configurations réseau historiques
+    /// avec le moteur de Calque (jonction §14) — codes de sortie 0 conforme,
+    /// 1 violation, 3 non concluant
+    Segmentation {
+        /// Fichier de flux, au format flows.yaml natif de Calque (le même
+        /// fichier que `calque test`)
+        #[arg(long, value_name = "FICHIER")]
+        flows: PathBuf,
+        /// Date d'évaluation : dernier blob network.configs antérieur
+        #[arg(long, conflicts_with = "period", required_unless_present = "period")]
+        at: Option<String>,
+        /// Période, ex. 2026-Q1 : chronologie des verdicts à chaque
+        /// changement de configuration, avec couverture et trous déclarés
+        #[arg(long)]
+        period: Option<String>,
+        /// Enregistre le verdict comme entrée signée du journal (§14) —
+        /// la seule commande de la CLI qui écrit dans le magasin
+        #[arg(long, conflicts_with = "period")]
+        record: bool,
+        /// Répertoire des clés de l'agent (agent.key) pour signer
+        /// l'enregistrement
+        #[arg(long, value_name = "DOSSIER", requires = "record")]
+        keys: Option<PathBuf>,
+        /// Machine du snapshot enregistré par --record
+        #[arg(long, default_value = constat_cli::segmentation::DEFAULT_ASSET)]
+        asset: String,
+    },
     /// Rappelle comment vérifier un dossier SANS Constat (binaire séparé, §10.3)
     Verify {
         /// Répertoire d'export à vérifier (produit par `constat export --out`)
@@ -255,6 +286,32 @@ fn main() -> miette::Result<()> {
                 store_path: Some(&store_path),
             };
             println!("{}", commands::cmd_anchor(store.as_ref(), &args)?);
+        }
+        Command::Segmentation {
+            flows,
+            at,
+            period,
+            record,
+            keys,
+            asset,
+        } => {
+            // Ouverture en écriture UNIQUEMENT parce que `--record` peut
+            // ajouter une entrée signée (§14) ; sans lui, rien n'est modifié.
+            let mut store = storeopen::open_store(&store_path)?;
+            let args = segmentation::SegmentationArgs {
+                flows_path: &flows,
+                at: at.as_deref(),
+                period: period.as_deref(),
+                record,
+                keys: keys.as_deref(),
+                asset: &asset,
+            };
+            let (out, code) = segmentation::cmd_segmentation(store.as_mut(), &args)?;
+            println!("{out}");
+            if code != 0 {
+                // Conventions de Calque : 1 violation, 3 non concluant.
+                std::process::exit(i32::from(code));
+            }
         }
         Command::Verify { export } => {
             // Pas d'ouverture du magasin : cette commande n'est qu'un rappel,

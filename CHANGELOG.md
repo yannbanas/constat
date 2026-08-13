@@ -7,6 +7,40 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.3.0] — 2026-08-13
+
+### Ajouté
+
+- **Collecteur `network.configs`** (S7) : répertoire de dépôt
+  (`/var/lib/constat/network-configs/`,
+  `C:\ProgramData\constat\network-configs\`) — un fichier par équipement
+  réseau (FortiGate, Cisco IOS, nftables, OPNsense), capture multi-sections
+  déterministe, expurgation dédiée (`psksecret`, blobs `ENC`,
+  `enable secret`, communautés SNMP, balises XML sensibles — la structure
+  survit, jamais la valeur), faits `netdev.config_present`,
+  `netdev.config_lines`, `netdev.format_hint`.
+- **`constat segmentation` — la jonction avec Calque** (§14, chantier S7) :
+  évalue les configurations réseau historiques du magasin avec le moteur de
+  Calque (v0.3.0, épinglé par tag git — exception justifiée dans `deny.toml`).
+  - `--flows <fichier> --at <date>` : relit le dernier blob `network.configs`
+    antérieur à la date, importe chaque équipement (`calque-vendors`, libellé
+    `<équipement>@<date>` — chaque règle décisive cite sa source et sa ligne),
+    assemble le réseau (`calque-engine`) et évalue les flux déclarés
+    (`calque-policy`, même `flows.yaml` que `calque test`). Verdicts trois
+    états (conforme / violé / non concluant), équipement illisible ou import
+    partiel **déclaré** et bloquant tout verdict ferme, traçabilité par
+    empreinte du blob de configurations. Codes de sortie 0/1/3.
+  - `--period <p>` : chronologie des verdicts à chaque changement de
+    configuration observé dans la période, intervalles datés par flux,
+    couverture et trous déclarés.
+  - `--record [--keys <dossier>] [--asset <machine>]` : le verdict redevient
+    un fait horodaté — entrée signée au journal, collecteur
+    `calque.segmentation` (compte rendu complet en artefact brut, faits
+    `flow.expected`/`flow.verdict`/`flow.status`/`flow.rule` et entité
+    `segmentation:run` avec les empreintes du fichier de flux et du blob
+    évalué). **La seule commande de la CLI qui écrit dans le magasin**,
+    documentée comme telle dans l'aide.
+
 ## [0.2.0] — 2026-08-13
 
 ### Ajouté
@@ -85,6 +119,7 @@ non-répudiation : celui qui détient la clé peut tronquer la fin du journal.
 Constat ne détecte pas un agent compromis qui mentirait, et ne dit rien d'une
 machine sans agent.
 
-[Non publié] : https://github.com/yannbanas/constat/compare/v0.2.0...HEAD
+[Non publié] : https://github.com/yannbanas/constat/compare/v0.3.0...HEAD
+[0.3.0] : https://github.com/yannbanas/constat/compare/v0.2.0...v0.3.0
 [0.2.0] : https://github.com/yannbanas/constat/compare/v0.1.0...v0.2.0
 [0.1.0] : https://github.com/yannbanas/constat/releases/tag/v0.1.0

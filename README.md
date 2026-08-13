@@ -162,6 +162,56 @@ Chaque collecteur ne tourne que sur sa plateforme et se déclare
 « indisponible » ailleurs, avec le motif — jamais de données simulées.
 Hors domaine, `ad.*` le dit et n'invente rien.
 
+S'y ajoute `network.configs`, présent sur les deux plateformes : les
+équipements réseau (pare-feu, routeurs) ne peuvent pas héberger d'agent,
+l'exploitant **dépose** leurs configurations exportées dans un répertoire
+(rancid, oxidized ou simple script) et le collecteur les archive, expurgées,
+en un blob multi-sections — c'est lui qu'évalue `constat segmentation`.
+
+---
+
+## La jonction avec Calque
+
+> « Prouvez-moi que votre réseau industriel était isolé du bureautique
+> pendant tout le trimestre. »
+
+Personne ne sait répondre à cette question aujourd'hui : les journaux
+prouvent au mieux ce qui s'est *passé*, pas ce qui était *possible*. La
+jonction avec [Calque](https://github.com/yannbanas/calque) la rend
+décidable :
+
+- **Constat prouve quel était l'état** des configurations réseau, à chaque
+  date, sans falsification possible (collecteur `network.configs`, magasin
+  signé) ;
+- **Calque calcule ce que cet état impliquait** en accessibilité réelle
+  (import constructeur, topologie, moteur de traçage) ;
+- et le **verdict d'accessibilité redevient un fait horodaté** dans le
+  journal signé.
+
+```bash
+# le même flows.yaml que `calque test` — un seul format, pas de dialecte
+constat segmentation --flows flows.yaml --at 2026-03-03T14:00
+constat segmentation --flows flows.yaml --period 2026-Q1
+constat segmentation --flows flows.yaml --at 2026-03-31 --record --keys ./constat-agent.keys
+```
+
+- `--at` relit le dernier blob `network.configs` antérieur à la date, importe
+  chaque équipement dans Calque (libellé `<équipement>@<date>` : chaque règle
+  décisive cite « fw-01@2026-03-03T14:00Z ligne 42 ») et évalue les flux
+  déclarés. Trois verdicts par flux : ✔ conforme, ✘ violé, ? non concluant —
+  un équipement illisible ou un import partiel est **déclaré** et interdit
+  tout verdict ferme, l'outil ne devine jamais. Codes de sortie : 0 conforme,
+  1 violation, 3 non concluant (conventions de Calque).
+- `--period` évalue **chaque changement de configuration** observé dans la
+  période et restitue la chronologie : intervalles de verdict stable par
+  flux, datés, avec la couverture et les trous déclarés — la réponse à
+  « pendant tout le trimestre ».
+- `--record` archive le verdict en entrée **signée** du journal (collecteur
+  `calque.segmentation` : compte rendu complet en brut, faits `flow.*`
+  requêtables par `constat history`). C'est la seule commande de la CLI qui
+  écrit dans le magasin — le verdict d'accessibilité est un constat comme un
+  autre.
+
 ---
 
 ## Ce que Constat ne prétend pas faire

@@ -1,0 +1,246 @@
+---
+source: crates/constat-collect/tests/snapshots_extracteurs.rs
+expression: redacted
+---
+### constat:fichier netdev:fw-dmz-01
+#config-version=FGT60F-7.0.5-FW-build0304-220328:opmode=0:vdom=0
+# Configuration fictive et anonyme - fixture de test constat.
+# Adressage RFC1918 invente ; secrets FACTICES pour exercer l'expurgation.
+config system global
+    set hostname "fw-dmz-01"
+end
+config system admin
+    edit "admin"
+        set password [EXPURGÉ:mot-de-passe]
+        set accprofile "super_admin"
+    next
+end
+config system interface
+    edit "lan"
+        set vdom "root"
+        set ip 10.10.1.1 255.255.255.0
+        set allowaccess ping https ssh
+        set type physical
+        set role lan
+    next
+    edit "dmz"
+        set vdom "root"
+        set ip 10.10.2.1 255.255.255.0
+        set allowaccess ping
+        set type physical
+        set role dmz
+    next
+    edit "wan"
+        set vdom "root"
+        set ip 10.200.0.2 255.255.255.252
+        set type physical
+        set role wan
+    next
+end
+config vpn ipsec phase1-interface
+    edit "vpn-agence"
+        set interface "wan"
+        set peertype any
+        set proposal aes256-sha256
+        set remote-gw 10.201.0.9
+        set psksecret [EXPURGÉ:cle-partagee]
+    next
+end
+config firewall address
+    edit "h-srv-web"
+        set subnet 10.10.2.10 255.255.255.255
+    next
+end
+config firewall policy
+    edit 1
+        set name "lan-vers-dmz-web"
+        set srcintf "lan"
+        set dstintf "dmz"
+        set srcaddr "all"
+        set dstaddr "h-srv-web"
+        set action accept
+        set schedule "always"
+        set service "HTTPS"
+    next
+    edit 2
+        set name "dmz-isolement"
+        set srcintf "dmz"
+        set dstintf "lan"
+        set srcaddr "all"
+        set dstaddr "all"
+        set action deny
+        set schedule "always"
+        set service "ALL"
+    next
+end
+### constat:fichier netdev:fw-opn-03
+<?xml version="1.0"?>
+<!-- Configuration fictive et anonyme - fixture de test constat. -->
+<!-- Adressage RFC1918 invente ; secrets FACTICES pour exercer l'expurgation. -->
+<opnsense>
+  <version>23.7.10</version>
+  <system>
+    <hostname>fw-opn-03</hostname>
+    <domain>lab.example</domain>
+    <user>
+      <name>root</name>
+      <password>[EXPURGÉ:mot-de-passe]</password>
+      <apikey>[EXPURGÉ:secret]</apikey>
+      <apisecret>[EXPURGÉ:secret]</apisecret>
+    </user>
+    <webgui>
+      <protocol>https</protocol>
+    </webgui>
+  </system>
+  <interfaces>
+    <wan>
+      <if>vtnet0</if>
+      <enable>1</enable>
+      <ipaddr>10.200.0.2</ipaddr>
+      <subnet>30</subnet>
+      <gateway>GW_WAN</gateway>
+    </wan>
+    <lan>
+      <if>vtnet1</if>
+      <enable>1</enable>
+      <ipaddr>10.10.1.1</ipaddr>
+      <subnet>24</subnet>
+    </lan>
+  </interfaces>
+  <filter>
+    <rule uuid="c0a80101-0000-4000-8000-000000000001">
+      <type>pass</type>
+      <interface>lan</interface>
+      <ipprotocol>inet</ipprotocol>
+      <protocol>tcp</protocol>
+      <source>
+        <network>lan</network>
+      </source>
+      <destination>
+        <address>10.10.2.10</address>
+        <port>8443</port>
+      </destination>
+      <descr>postes vers serveur web de la dmz</descr>
+    </rule>
+    <rule uuid="c0a80101-0000-4000-8000-000000000002">
+      <type>block</type>
+      <interface>opt1</interface>
+      <ipprotocol>inet</ipprotocol>
+      <quick>1</quick>
+      <source>
+        <network>opt1</network>
+      </source>
+      <destination>
+        <network>lan</network>
+      </destination>
+      <descr>isolement de la dmz</descr>
+    </rule>
+  </filter>
+  <snmpd>
+    <syslocation>baie A1</syslocation>
+    <rocommunity>[EXPURGÉ:communauté-snmp]</rocommunity>
+    <authkey>[EXPURGÉ:secret]</authkey>
+    <privkey>[EXPURGÉ:secret]</privkey>
+  </snmpd>
+  <unbound>
+    <enable>1</enable>
+    <dnssec>1</dnssec>
+  </unbound>
+</opnsense>
+### constat:fichier netdev:pass-usine-04
+#!/usr/sbin/nft -f
+# Configuration fictive et anonyme - fixture de test constat.
+# Adressage RFC1918 invente ; aucun equipement ni nom reel.
+
+flush ruleset
+
+define net_admin = 10.20.30.0/24
+
+table inet filtre {
+    set postes_surv {
+        type ipv4_addr
+        flags interval
+        elements = { 10.20.40.0/26, 10.20.41.16/28 }
+    }
+
+    chain entree {
+        type filter hook input priority 0; policy drop;
+
+        ct state established,related accept
+        ct state invalid drop
+
+        iifname "lo" accept
+        ip saddr $net_admin tcp dport { 22, 443 } accept
+        ip saddr @postes_surv udp dport 161 accept
+        ip protocol icmp accept
+    }
+
+    chain transit {
+        type filter hook forward priority 0; policy drop;
+
+        ct state established,related accept
+        ip saddr 192.168.99.0/24 drop
+        iifname "lan0" oifname "wan0" jump sortie_lan
+    }
+
+    chain sortie_lan {
+        tcp dport { 80, 443 } accept
+        udp dport 53 accept
+    }
+}
+### constat:fichier netdev:rtr-agence-02
+!
+! Configuration fictive et anonyme - fixture de test constat.
+! Adressage RFC1918 invente ; secrets FACTICES pour exercer l'expurgation.
+!
+version 15.4
+service timestamps log datetime msec
+service password-encryption
+!
+hostname rtr-agence-02
+!
+enable secret 5 [EXPURGÉ:hachage]
+!
+username ops secret 5 [EXPURGÉ:hachage]
+username invite password 0 [EXPURGÉ:mot-de-passe]
+!
+interface GigabitEthernet0/0
+ description LAN utilisateurs
+ ip address 10.20.1.1 255.255.255.0
+ ip access-group ACL-ENTREE-LAN in
+ no shutdown
+!
+interface GigabitEthernet0/1
+ description segment serveurs
+ ip address 10.20.2.1 255.255.255.0
+ standby 1 ip 10.20.2.254
+ standby 1 authentication md5 key-string [EXPURGÉ:cle-partagee]
+!
+interface GigabitEthernet0/2
+ description liaison WAN operateur
+ ip address 10.200.1.2 255.255.255.252
+!
+ip route 0.0.0.0 0.0.0.0 10.200.1.1
+!
+ip access-list extended ACL-ENTREE-LAN
+ permit tcp 10.20.1.0 0.0.0.255 host 10.20.2.10 eq 445
+ permit udp any host 10.20.2.53 eq domain
+ deny ip any any log
+!
+key chain SECOURS
+ key 1
+  key-string [EXPURGÉ:cle-partagee]
+!
+crypto isakmp key [EXPURGÉ:cle-partagee] address 10.200.1.9
+!
+tacacs-server host 10.20.2.40 key 7 [EXPURGÉ:cle-partagee]
+radius-server host 10.20.2.41 auth-port 1812 key [EXPURGÉ:cle-partagee]
+!
+snmp-server community [EXPURGÉ:communauté-snmp] RO
+logging host 10.20.2.20
+ntp server 10.20.2.30
+!
+line vty 0 4
+ transport input ssh
+!
+end

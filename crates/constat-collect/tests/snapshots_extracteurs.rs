@@ -13,6 +13,7 @@ use constat_collect::linux::ports::{PortsCollector, SECTION_TCP, SECTION_TCP6, S
 use constat_collect::linux::sshd::SshdCollector;
 use constat_collect::linux::sudoers::SudoersCollector;
 use constat_collect::linux::systemd::{SystemdCollector, SECTION_UNIT_FILES};
+use constat_collect::network_configs::{build_network_capture, NetworkConfigsCollector};
 use constat_collect::windows::accounts::AccountsCollector as WindowsAccountsCollector;
 use constat_collect::windows::ad_groups::AdGroupsCollector;
 use constat_collect::windows::gpo_security::{
@@ -40,6 +41,10 @@ const WINDOWS_ACCOUNTS: &str = include_str!("fixtures/windows-accounts");
 const WINDOWS_PASSWORD_POLICY: &str = include_str!("fixtures/windows-password-policy");
 const WINDOWS_SERVICES: &str = include_str!("fixtures/windows-services");
 const AD_GROUPS: &str = include_str!("fixtures/ad-groups");
+const NETDEV_FORTIGATE: &str = include_str!("fixtures/netdev-fortigate.conf");
+const NETDEV_CISCO_IOS: &str = include_str!("fixtures/netdev-cisco-ios.conf");
+const NETDEV_NFTABLES: &str = include_str!("fixtures/netdev-nftables.nft");
+const NETDEV_OPNSENSE: &str = include_str!("fixtures/netdev-opnsense.xml");
 /// Fixture réaliste : UTF-16LE avec BOM et fins de ligne CRLF, comme l'écrit
 /// l'éditeur de GPO (SecEdit). Décodée par l'extracteur pur.
 const GPT_TMPL_INF: &[u8] = include_bytes!("fixtures/GptTmpl.inf");
@@ -151,6 +156,21 @@ fn instantane_ad_groups() {
     let (redacted, facts) = pipeline(&AdGroupsCollector, AD_GROUPS);
     insta::assert_snapshot!("ad_groups_capture_expurgee", redacted);
     insta::assert_debug_snapshot!("ad_groups_faits", facts);
+}
+
+#[test]
+fn instantane_network_configs() {
+    // la capture telle que la collecte réelle la construit : une section par
+    // équipement déposé, triée par nom (déterminisme des empreintes)
+    let raw = build_network_capture(&[
+        ("fw-dmz-01", NETDEV_FORTIGATE),
+        ("rtr-agence-02", NETDEV_CISCO_IOS),
+        ("pass-usine-04", NETDEV_NFTABLES),
+        ("fw-opn-03", NETDEV_OPNSENSE),
+    ]);
+    let (redacted, facts) = pipeline(&NetworkConfigsCollector::default(), &raw);
+    insta::assert_snapshot!("network_configs_capture_expurgee", redacted);
+    insta::assert_debug_snapshot!("network_configs_faits", facts);
 }
 
 #[test]

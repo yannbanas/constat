@@ -5,9 +5,12 @@
 //! et le câblage du backend concret (redb) se limite à
 //! [`storeopen::open_store`].
 //!
-//! La CLI est en lecture seule, comme tout le produit (§1) : aucune commande
-//! n'écrit dans le magasin. Les seules écritures se font **à côté** : export
-//! vérifiable, fichiers d'ancrage, dossier de preuve.
+//! La CLI est en lecture seule, comme tout le produit (§1), à UNE exception
+//! près, assumée et documentée : `segmentation --record` ([`segmentation`]),
+//! qui archive le verdict d'accessibilité comme entrée **signée** du journal
+//! — le §14 en fait un fait horodaté de plein droit. Toutes les autres
+//! écritures se font **à côté** du magasin : export vérifiable, fichiers
+//! d'ancrage, dossier de preuve.
 
 pub mod anchors;
 pub mod commands;
@@ -19,4 +22,5 @@ pub mod keyres;
 pub mod queries;
 pub mod referential;
 pub mod render;
+pub mod segmentation;
 pub mod storeopen;

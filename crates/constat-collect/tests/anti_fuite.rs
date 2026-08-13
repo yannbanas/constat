@@ -20,6 +20,9 @@ use constat_collect::linux::ports::{PortsCollector, SECTION_TCP, SECTION_UDP};
 use constat_collect::linux::sshd::SshdCollector;
 use constat_collect::linux::sudoers::SudoersCollector;
 use constat_collect::linux::systemd::{SystemdCollector, SECTION_UNIT_FILES};
+use constat_collect::network_configs::{
+    build_network_capture, NetworkConfigsCollector, SECTION_NETDEV_PREFIX,
+};
 use constat_collect::windows::accounts::AccountsCollector as WindowsAccountsCollector;
 use constat_collect::windows::ad_groups::AdGroupsCollector;
 use constat_collect::windows::gpo_security::{GpoSecurityCollector, SECTION_GPO_PREFIX};
@@ -53,6 +56,23 @@ const SECRET_PASSWORD_2: &str = "S3cretFuite09";
 const SECRET_TOKEN: &str = "ghp_Fuite10Fuite10Fuite10Fuite10abcd";
 /// Longue chaîne base64 (fausse clé symétrique) en contexte sensible.
 const SECRET_BASE64: &str = "ZmF1c3NlY2xlZkZ1aXRlMTFmYXVzc2VjbGVmRnVpdGUxMQ==";
+/// Blob `ENC` FortiGate factice (charset base64, traçable).
+const SECRET_FORTI_ENC: &str = "FuiteEnc12FuiteEnc12FuiteEnc12==";
+/// PSK IPsec FortiGate factice, en clair.
+const SECRET_FORTI_PSK: &str = "FuitePsk13!";
+/// Communauté SNMP factice.
+const SECRET_SNMP_COMMUNITY: &str = "FuiteCommunaute14";
+/// Clé pré-partagée ISAKMP factice.
+const SECRET_ISAKMP_KEY: &str = "FuiteIsakmp15";
+/// Clé TACACS factice (type 7).
+const SECRET_TACACS_KEY: &str = "0822455DFuite16";
+/// `key-string` factice (key chain / HSRP).
+const SECRET_KEY_STRING: &str = "FuiteKs17";
+/// Contenus de balises XML sensibles factices.
+const SECRET_XML_PASSWORD: &str = "MotXmlFuite18";
+const SECRET_XML_APIKEY: &str = "CleApiFuite19";
+const SECRET_XML_AUTHKEY: &str = "AuthFuite20";
+const SECRET_XML_PRIVKEY: &str = "PrivFuite21";
 
 /// Les motifs qui ne doivent JAMAIS survivre à l'expurgation.
 fn secret_markers() -> Vec<(&'static str, String)> {
@@ -72,6 +92,16 @@ fn secret_markers() -> Vec<(&'static str, String)> {
         ("mot-de-passe-2", SECRET_PASSWORD_2.to_string()),
         ("jeton", SECRET_TOKEN.to_string()),
         ("base64", SECRET_BASE64.to_string()),
+        ("fortigate-enc", SECRET_FORTI_ENC.to_string()),
+        ("fortigate-psk", SECRET_FORTI_PSK.to_string()),
+        ("communaute-snmp", SECRET_SNMP_COMMUNITY.to_string()),
+        ("cle-isakmp", SECRET_ISAKMP_KEY.to_string()),
+        ("cle-tacacs", SECRET_TACACS_KEY.to_string()),
+        ("key-string", SECRET_KEY_STRING.to_string()),
+        ("xml-password", SECRET_XML_PASSWORD.to_string()),
+        ("xml-apikey", SECRET_XML_APIKEY.to_string()),
+        ("xml-authkey", SECRET_XML_AUTHKEY.to_string()),
+        ("xml-privkey", SECRET_XML_PRIVKEY.to_string()),
         // sous-motif traçant commun : si une variante non listée fuit, il crie
         ("traceur", "Fuite".to_string()),
         ("traceur-pem", "FUITE".to_string()),
@@ -532,6 +562,128 @@ fn anti_fuite_ad_gpo_security() {
         inf.as_str(),
     )]);
     assert_pipeline_leak_free(&GpoSecurityCollector, &hostile);
+}
+
+// ---------------------------------------------------------------------------
+// network.configs — chaque famille de secrets d'équipement réseau (S7)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anti_fuite_network_configs() {
+    let fortigate = format!(
+        "config system global\n\
+         \x20   set hostname \"fw-hostile\"\n\
+         end\n\
+         config system admin\n\
+         \x20   edit \"admin\"\n\
+         \x20       set password ENC {enc}\n\
+         \x20   next\n\
+         end\n\
+         config vpn ipsec phase1-interface\n\
+         \x20   edit \"vpn\"\n\
+         \x20       set psksecret {psk}\n\
+         \x20       set passphrase {p1}\n\
+         \x20   next\n\
+         end\n\
+         config vpn certificate local\n\
+         \x20   edit \"srv\"\n\
+         \x20       set private-key \"{pem}\"\n\
+         \x20   next\n\
+         end\n",
+        enc = SECRET_FORTI_ENC,
+        psk = SECRET_FORTI_PSK,
+        p1 = SECRET_PASSWORD_1,
+        pem = fake_pem("ENCRYPTED PRIVATE KEY", SECRET_PEM_RSA),
+    );
+    let cisco = format!(
+        "version 15.4\n\
+         hostname rtr-hostile\n\
+         enable secret 5 $1${salt}${hash}\n\
+         enable password {p2}\n\
+         username ops secret 5 $1${salt}${hash}\n\
+         username invite password 0 {p1}\n\
+         interface GigabitEthernet0/0\n\
+         \x20standby 1 authentication md5 key-string {ks}\n\
+         key chain SECOURS\n\
+         \x20key 1\n\
+         \x20 key-string {ks}\n\
+         crypto isakmp key {isakmp} address 10.200.1.9\n\
+         tacacs-server host 10.20.2.40 key 7 {tacacs}\n\
+         radius-server host 10.20.2.41 key {tacacs}\n\
+         snmp-server community {snmp} RO\n\
+         end\n",
+        salt = SECRET_SHADOW_SHA512_SALT,
+        hash = SECRET_SHADOW_SHA512_HASH,
+        p1 = SECRET_PASSWORD_1,
+        p2 = SECRET_PASSWORD_2,
+        ks = SECRET_KEY_STRING,
+        isakmp = SECRET_ISAKMP_KEY,
+        tacacs = SECRET_TACACS_KEY,
+        snmp = SECRET_SNMP_COMMUNITY,
+    );
+    let nftables = format!(
+        "table inet filtre {{\n\
+         \x20   chain entree {{\n\
+         \x20       type filter hook input priority 0; policy drop;\n\
+         \x20       # note hostile d'un exploitant : password={p1}\n\
+         \x20       tcp dport 22 accept comment \"api_key: {t}\"\n\
+         \x20   }}\n\
+         }}\n",
+        p1 = SECRET_PASSWORD_1,
+        t = SECRET_TOKEN,
+    );
+    let xml = format!(
+        "<?xml version=\"1.0\"?>\n\
+         <opnsense>\n\
+         \x20 <system>\n\
+         \x20   <user>\n\
+         \x20     <password>{xp}</password>\n\
+         \x20     <apikey>{xa}</apikey>\n\
+         \x20   </user>\n\
+         \x20 </system>\n\
+         \x20 <snmpd>\n\
+         \x20   <rocommunity>{snmp}</rocommunity>\n\
+         \x20   <authkey>{xk}</authkey>\n\
+         \x20   <privkey>{xv}\n\
+         {xv}</privkey>\n\
+         \x20 </snmpd>\n\
+         </opnsense>\n",
+        xp = SECRET_XML_PASSWORD,
+        xa = SECRET_XML_APIKEY,
+        snmp = SECRET_SNMP_COMMUNITY,
+        xk = SECRET_XML_AUTHKEY,
+        xv = SECRET_XML_PRIVKEY,
+    );
+    let hostile = build_network_capture(&[
+        ("fw-hostile", &fortigate),
+        ("rtr-hostile", &cisco),
+        ("nft-hostile", &nftables),
+        ("opn-hostile", &xml),
+    ]);
+    assert_pipeline_leak_free(&NetworkConfigsCollector::default(), &hostile);
+}
+
+/// La structure survit à l'expurgation : l'auditeur voit qu'une communauté
+/// SNMP était configurée (`RO` conservé), jamais sa valeur — et les faits ne
+/// portent que des comptages et des indices de format.
+#[test]
+fn anti_fuite_network_configs_la_structure_atteste() {
+    let cisco = format!(
+        "version 15.4\ninterface Gi0/0\nsnmp-server community {snmp} RO\n",
+        snmp = SECRET_SNMP_COMMUNITY
+    );
+    let hostile = build_network_capture(&[("rtr", &cisco)]);
+    let collector = NetworkConfigsCollector::default();
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let text = String::from_utf8_lossy(&redacted.0).into_owned();
+    assert!(
+        text.contains(&format!(
+            "snmp-server community {} RO",
+            constat_collect::redact::MARKER_SNMP_COMMUNITY
+        )),
+        "la structure de la ligne doit survivre : {text}"
+    );
+    assert!(text.contains(&format!("{SECTION_NETDEV_PREFIX}rtr")));
 }
 
 // ---------------------------------------------------------------------------

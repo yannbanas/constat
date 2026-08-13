@@ -14,6 +14,7 @@ use constat_model::{CollectorId, Fact};
 pub mod backup;
 pub mod capture;
 pub mod linux;
+pub mod network_configs;
 pub mod redact;
 pub mod windows;
 
@@ -69,6 +70,9 @@ pub fn all_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(linux::ports::PortsCollector::default()),
         Box::new(linux::systemd::SystemdCollector::default()),
         Box::new(windows::services::ServicesCollector),
+        // …et la segmentation côté équipements réseau (§7.3 priorité haute,
+        // §13 S7) : le répertoire de dépôt, présent sur les deux plateformes
+        Box::new(network_configs::NetworkConfigsCollector::default()),
         Box::new(linux::kernel_params::KernelParamsCollector::default()),
     ]
 }
@@ -95,6 +99,7 @@ mod tests {
                 "linux.ports",
                 "linux.systemd",
                 "windows.services",
+                "network.configs",
                 "linux.kernel_params"
             ]
         );
