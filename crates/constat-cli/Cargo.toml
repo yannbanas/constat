@@ -46,8 +46,8 @@ serde_yaml = { workspace = true }
 # Client HTTPS de `constat anchor --send` : rustls synchrone sur
 # std::net::TcpStream, même profil que l'agent et le serveur (fournisseur
 # ring fixé explicitement, pas d'exécuteur asynchrone).
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
-rustls-pki-types = { version = "1.10", features = ["std"] }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
 # Racines de confiance Mozilla, embarquées : les prestataires d'horodatage
 # publics présentent des certificats publics — aucun magasin système à lire,
 # comportement identique sur toutes les plateformes. Version explicite :
@@ -61,7 +61,7 @@ constat-verify = { workspace = true }
 ciborium = { workspace = true }
 # Serveur TLS local des tests HTTPS : certificat auto-signé fabriqué par
 # rcgen, racine injectée côté client — aucun réseau externe dans les tests.
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { workspace = true }
 
 [lints]
 workspace = true

@@ -22,16 +22,16 @@ hex = { workspace = true }
 # connexion — pas de runtime async, pas de bibliothèque HTTP.
 # Fournisseur cryptographique `ring` explicitement (et non le défaut
 # aws-lc-rs) : compilation portable sans cmake/NASM, surface plus réduite.
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
+rustls = { workspace = true }
 # Lecture des fichiers PEM (certificat serveur, clé, autorité des agents).
 # 1.10 au minimum : le module `pem` (PemObject) n'existe pas avant.
-rustls-pki-types = { version = "1.10", features = ["std"] }
+rustls-pki-types = { workspace = true }
 
 [dev-dependencies]
 # Test bout-en-bout : le vrai client de poussée de l'agent contre ce serveur.
 constat-agent = { path = "../constat-agent" }
 # Génération d'une petite PKI de test (CA serveur, CA agents, certs feuilles).
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { workspace = true }
 
 [lints]
 workspace = true

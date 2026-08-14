@@ -21,10 +21,10 @@ thiserror = { workspace = true }
 # std::net::TcpStream — pas de runtime async, pas de bibliothèque HTTP.
 # Fournisseur cryptographique `ring` explicitement (et non le défaut
 # aws-lc-rs) : compilation portable sans cmake/NASM, surface plus réduite.
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
+rustls = { workspace = true }
 # Lecture des fichiers PEM (certificat client, clé, autorité du serveur).
 # 1.10 au minimum : le module `pem` (PemObject) n'existe pas avant.
-rustls-pki-types = { version = "1.10", features = ["std"] }
+rustls-pki-types = { workspace = true }
 
 [lints]
 workspace = true
