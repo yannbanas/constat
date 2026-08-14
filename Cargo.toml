@@ -47,7 +47,7 @@ calque-vendors = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
 serde = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 blake3 = "1"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "3", features = ["rand_core"] }
 rand = "0.8"
 zstd = "0.13"
 redb = "2"
