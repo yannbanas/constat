@@ -47,7 +47,7 @@ use std::path::Path;
 use constat_model::{
     from_canonical_bytes, hash_canonical, to_canonical_bytes, Blob, BlobHash, Snapshot,
 };
-use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 use crate::journal::check_journal_signature;
 use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};

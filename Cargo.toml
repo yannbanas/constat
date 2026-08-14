@@ -50,7 +50,11 @@ blake3 = "1"
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 rand = "0.10"
 zstd = "0.13"
-redb = "2"
+# redb 4 : format de fichier v3 (redb 3 a abandonné la lecture du v2).
+# Bump fait AVANT tout déploiement en production — aucun magasin existant à
+# migrer. Après le premier déploiement, tout changement de format exigera
+# une migration explicite outillée.
+redb = "4"
 # rustls synchrone, fournisseur ring fixé (pas d'aws-lc-rs : compilation
 # Windows sans cmake/NASM) — configuration partagée par agent, serveur et CLI.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }

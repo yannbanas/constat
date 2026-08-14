@@ -174,6 +174,7 @@ fn redb_compresse_les_blobs() {
 
     // Lire les octets réellement stockés dans la table (le fichier redb est
     // préalloué par gros blocs, sa taille n'est pas un bon indicateur).
+    use redb::ReadableDatabase as _;
     let db = redb::Database::create(&path).unwrap();
     let tx = db.begin_read().unwrap();
     let table = tx
