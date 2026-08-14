@@ -83,19 +83,22 @@ pub fn append_signed<S: Store + ?Sized>(
     Ok((hash, entry))
 }
 
-/// Vérifie qu'une entrée est bien signée par la clé du journal `journal` —
-/// la garde structurelle de [`crate::MultiJournalStore::append_entry_in`] :
+/// Vérifie qu'une entrée est bien signée par `signing_key` — la **clé
+/// courante** du journal visé, c'est-à-dire sa clé de genèse (le
+/// [`JournalId`]) tant qu'aucune rotation n'a eu lieu, puis la clé déléguée
+/// par la dernière rotation ([`crate::rotation::current_key`]). C'est la
+/// garde structurelle de [`crate::MultiJournalStore::append_entry_in`] :
 /// une clé ne peut jamais écrire dans le journal d'une autre.
 ///
 /// Partagée par les deux implémentations ([`crate::MemoryStore`],
 /// [`crate::RedbStore`]) pour que la propriété soit identique partout.
 pub(crate) fn check_journal_signature(
-    journal: &JournalId,
+    signing_key: &JournalId,
     entry: &JournalEntry,
 ) -> Result<(), StoreError> {
-    let key = VerifyingKey::from_bytes(journal).map_err(|e| {
+    let key = VerifyingKey::from_bytes(signing_key).map_err(|e| {
         StoreError::Encoding(format!(
-            "identifiant de journal : clé publique Ed25519 invalide : {e}"
+            "clé de journal : clé publique Ed25519 invalide : {e}"
         ))
     })?;
     let bytes = signable_bytes(entry).map_err(StoreError::from)?;
@@ -107,8 +110,9 @@ pub(crate) fn check_journal_signature(
     })?;
     key.verify_strict(&bytes, &signature).map_err(|_| {
         StoreError::ChainBroken(
-            "append refusé : la signature de l'entrée ne vérifie pas avec la clé de ce \
-             journal — une clé ne peut écrire que dans son propre journal"
+            "append refusé : la signature de l'entrée ne vérifie pas avec la clé courante \
+             de ce journal — une clé ne peut écrire que dans son propre journal (et après \
+             une rotation, seule la clé déléguée signe)"
                 .into(),
         )
     })
@@ -154,6 +158,13 @@ pub enum ChainError {
     /// La signature ne vérifie pas avec la clé publique fournie.
     #[error("entrée {index} : signature invalide pour la clé publique fournie")]
     BadSignature { index: usize },
+
+    /// Une rotation de clé portée par l'entrée est invalide : `old_key`
+    /// n'est pas la clé courante de la chaîne (usurpation), déclaration
+    /// illisible, ou blob de rotation absent (une rotation n'est jamais
+    /// purgeable). Détecté par [`crate::rotation::verify_chain_rotated`].
+    #[error("entrée {index} : rotation de clé invalide : {detail}")]
+    RotationInvalide { index: usize, detail: String },
 }
 
 /// Vérifie l'intégrité complète d'une chaîne d'entrées, dans l'ordre d'append.

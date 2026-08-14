@@ -92,8 +92,11 @@ désignant l'objet et la vérification en cause.
    « chaîne rompue à l'entrée i » sinon.
 5. **Signatures** — pour chaque entrée : reconstruire les octets signables
    (champ `signature` vidé, ré-encodage canonique), vérifier la signature
-   Ed25519 (64 octets) avec la clé publique. Échec « signature invalide à
-   l'entrée i » sinon.
+   Ed25519 (64 octets) avec la **clé courante** — `pubkey.bin` jusqu'à la
+   première rotation de clé valide, puis la clé déléguée (voir la section
+   « Rotation de clé » ci-dessous ; sans rotation dans l'export, la clé
+   courante est `pubkey.bin` du début à la fin, comme historiquement).
+   Échec « signature invalide à l'entrée i » sinon.
 6. **Références** — pour chaque entrée : chaque empreinte de `snapshots`
    doit exister dans `snapshots/` ; pour chaque snapshot, chaque empreinte
    de `blobs` doit exister dans `blobs/`. Échec « objet manquant » sinon —
@@ -186,6 +189,108 @@ chaque déclaration (période, motif, nombre d'objets, manifeste) :
 - Un objet présent dont l'empreinte figure dans un manifeste se vérifie
   normalement : déclarer plus que ce qui a réellement disparu est bénin.
 
+## 4 ter. Rotation de clé — le suivi de la clé de signature
+
+> Une clé de signature doit pouvoir tourner (usure, compromission) sans que
+> le journal cesse d'être vérifiable, et sans que personne d'autre que le
+> détenteur de la clé puisse opérer ce remplacement. La rotation est donc
+> **déclarée dans le journal lui-même**, signée par l'ancienne clé — c'est
+> elle qui délègue.
+
+**Note de version du format.** Cette section est une extension **additive** :
+un export sans blob `constat.rotation` se vérifie exactement comme avant,
+avec `pubkey.bin` de la genèse à la racine. Un vérificateur antérieur qui
+rencontre un export avec rotation échouera sur « signature invalide » à la
+première entrée post-rotation : c'est le comportement sûr, jamais un faux
+« OK ».
+
+### 4 ter.1 L'enregistrement de rotation
+
+Une rotation est déclarée par un blob ordinaire du **collecteur réservé**
+`constat.rotation`, référencé par un snapshot (machine `constat`), lui-même
+référencé par une **nouvelle entrée signée par l'ANCIENNE clé** — la chaîne
+existante n'est jamais réécrite. Les entrées **suivantes** sont signées par
+la nouvelle clé.
+
+Le blob porte :
+
+- dans `facts`, une entité `rotation:<horodatage ms>` avec :
+
+  | attribut | type | contenu |
+  |---|---|---|
+  | `rotation.old_key` | *empreinte* (variante `Fingerprint`) | les 32 octets de l'ancienne clé publique |
+  | `rotation.new_key` | *empreinte* (variante `Fingerprint`) | les 32 octets de la nouvelle clé publique |
+  | `rotation.reason` | texte ou `Absent` | motif (une seule ligne), optionnel |
+
+- dans `raw` (UTF-8), un document texte lisible (date, ancienne clé en
+  hexadécimal, nouvelle clé en hexadécimal, motif) — informatif : seuls les
+  faits font foi.
+
+### 4 ter.2 La clé courante — algorithme exact
+
+Maintenir une **clé courante**, initialisée à `pubkey.bin` (la clé de
+genèse). Pour chaque entrée `i`, de la genèse à la racine :
+
+1. vérifier la signature de l'entrée `i` avec la **clé courante**
+   (étape 5) — l'entrée de rotation elle-même est donc signée par
+   l'ancienne clé : c'est la délégation ;
+2. ensuite, pour chaque snapshot présent référencé par `i` qui contient la
+   clé de collecteur `constat.rotation` : lire le blob de rotation et
+   valider la déclaration (ci-dessous). Si elle est valide, la clé courante
+   **devient** `rotation.new_key` pour les entrées suivantes.
+
+Une déclaration de rotation n'est valide que si **tout** ce qui suit est
+vrai — sinon : échec « rotation invalide », l'export entier est refusé
+(jamais une tolérance) :
+
+1. le blob de rotation est **présent** dans l'export et son intégrité est
+   vérifiée (étape 2). Un blob de rotation absent est un refus **même si
+   son empreinte figure dans un manifeste de purge** : une entrée de
+   rotation n'est jamais purgeable (voir 4 ter.4) ;
+2. `rotation.old_key` et `rotation.new_key` sont présents, uniques, et
+   distincts l'un de l'autre ;
+3. `rotation.new_key` est une clé publique Ed25519 valide ;
+4. `rotation.old_key` est **égal à la clé courante** de la chaîne à cet
+   endroit. Une rotation dont `old_key` n'est pas la clé courante est une
+   **tentative d'usurpation** — quelqu'un essaie de détourner la chaîne
+   vers une clé qu'aucun détenteur légitime n'a déléguée — et l'export est
+   refusé.
+
+Le résultat compte les rotations suivies et restitue la **clé finale**
+(celle qui signe la dernière entrée et signera la suivante) :
+« N rotation(s) de clé, clé finale <hex abrégé> ».
+
+### 4 ter.3 L'identité du journal ne change pas
+
+`pubkey.bin` reste la clé de **genèse**, avant comme après toute rotation :
+c'est l'**identité** du journal (et l'identifiant du journal côté serveur
+central). La rotation change la clé de *signature courante*, jamais
+l'identité — l'historique « qui a signé quoi, quand » se lit dans la chaîne
+elle-même. Un vérificateur qui reçoit une clé publique de la part de
+l'opérateur reçoit donc toujours la clé de genèse.
+
+### 4 ter.4 Interaction avec la purge (§ 4 bis)
+
+Une entrée de rotation (son snapshot et son blob `constat.rotation`) n'est
+**jamais purgeable** — même règle que les enregistrements de purge, et pour
+une raison plus forte encore : purger une rotation rendrait la clé courante
+indéterminable, donc **toute la suite de la chaîne invérifiable**. Côté
+vérificateur, un blob de rotation manquant est un échec « rotation
+invalide », que son empreinte figure ou non dans un manifeste de purge.
+
+### 4 ter.5 Ce que la rotation ne permet pas
+
+- Elle ne « répare » pas une chaîne : chaînage, empreintes et signatures
+  (étapes 3 à 5) se vérifient intégralement, rotation ou pas.
+- Elle ne permet pas à un tiers de s'approprier un journal : la délégation
+  exige la signature de l'entrée de rotation par la clé courante **et**
+  `old_key` égal à la clé courante. Sans l'ancienne clé privée, aucune
+  rotation valide n'est constructible.
+- Elle ne protège pas contre un détenteur légitime malveillant : celui qui
+  possède la clé courante peut déléguer à qui il veut — comme il pouvait
+  déjà signer ce qu'il voulait. Les limites de §6.2 (troncature, ancrage
+  externe) s'appliquent inchangées.
+
 ## 5. Ce que cette vérification prouve — et ne prouve pas
 
 **Elle prouve** que l'export est **intérieurement cohérent** : personne n'a
@@ -208,7 +313,8 @@ artefact référencé, sans posséder la clé privée.
 
 Un vérificateur indépendant a besoin de : un décodeur CBOR, BLAKE3, Ed25519.
 Les étapes 1 à 7 ci-dessus (plus la section 4 bis si l'export contient des
-purges déclarées) sont l'intégralité de l'algorithme. La seule subtilité est
+purges déclarées, et la section 4 ter s'il contient des rotations de clé)
+sont l'intégralité de l'algorithme. La seule subtilité est
 l'étape 5 : les octets signables sont le **ré-encodage canonique** de
 l'entrée avec `signature: []` — l'encodage est déterministe (maps ordonnées,
 entiers, pas de flottants), donc le ré-encodage de l'entrée décodée redonne

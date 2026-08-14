@@ -24,8 +24,10 @@ Usage : constat-verify <répertoire-export>
 Vérifie un export de journal Constat sans dépendre de Constat :
   1. chaque snapshot et chaque blob correspond à son empreinte (nom de fichier) ;
   2. la chaîne d'empreintes est intacte de la genèse à la racine ;
-  3. chaque entrée porte une signature Ed25519 valide de la clé pubkey.bin ;
-  4. tout objet référencé est présent dans l'export.
+  3. chaque entrée porte une signature Ed25519 valide de la clé courante :
+     pubkey.bin (genèse), puis la clé déléguée par chaque rotation de clé
+     journalisée (blob constat.rotation, signé par l'ancienne clé) ;
+  4. tout objet référencé est présent dans l'export (ou déclaré purgé).
 
 Layout attendu (normatif : voir crates/constat-verify/FORMAT.md) :
   <répertoire>/pubkey.bin           clé publique Ed25519, 32 octets bruts
@@ -142,9 +144,25 @@ fn run(dir: &Path) -> Result<String, String> {
         note
     };
 
+    // Rotations de clé (FORMAT.md § 4 ter) : la clé courante a été suivie le
+    // long de la chaîne ; le résultat le dit et donne la clé finale — celle
+    // qui signera l'entrée suivante. Un export sans rotation garde la sortie
+    // historique.
+    let rotation_note = if ok.rotation_count == 0 {
+        String::new()
+    } else {
+        let final_hex: String = ok.final_key.iter().map(|b| format!("{b:02x}")).collect();
+        format!(
+            "{} rotation(s) de clé, clé finale {}…\n",
+            ok.rotation_count,
+            &final_hex[..16]
+        )
+    };
+
     Ok(format!(
         "OK — export vérifié : chaîne intacte, signatures valides, artefacts conformes.\n\
          {purge_note}\
+         {rotation_note}\
          Racine    : {}\n\
          Entrées   : {}\n\
          Snapshots : {}\n\

@@ -15,6 +15,9 @@
 //! - [`journal`] : construction, signature et vérification de la chaîne
 //!   ([`append_signed`], [`verify_chain`]) — lire son rustdoc pour ce que la
 //!   chaîne ne protège **pas** (§6.2) ;
+//! - [`rotation`] : rotation **journalisée** de la clé de signature
+//!   ([`rotate_key`], [`current_key`], [`verify_chain_rotated`]) — la clé
+//!   courante suit la chaîne, l'identité du journal reste la clé de genèse ;
 //! - [`export_store`] : export vers un répertoire au format consommé par
 //!   `constat-verify` en autonome (layout documenté dans [`export`]).
 //!
@@ -37,6 +40,7 @@ pub mod journal;
 pub mod memory;
 pub mod purge;
 pub mod redb_store;
+pub mod rotation;
 pub mod signer;
 
 pub use export::{export_journal, export_store};
@@ -48,6 +52,11 @@ pub use purge::{
     PURGE_COLLECTOR,
 };
 pub use redb_store::RedbStore;
+pub use rotation::{
+    build_rotation_blob, current_key, genesis_key, parse_rotation_blob, rotate_key,
+    verify_chain_rotated, RotationDeclaration, RotationError, RotationTrace, ROTATION_ASSET,
+    ROTATION_COLLECTOR,
+};
 pub use signer::Signer;
 
 // Ré-exports pour que les crates aval (constat-verify, constat-agent, constat-cli)

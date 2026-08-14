@@ -370,9 +370,15 @@ impl MultiJournalStore for RedbStore {
         journal: &JournalId,
         entry: &JournalEntry,
     ) -> Result<BlobHash, StoreError> {
-        // Propriété structurelle : l'entrée doit être signée par la clé de
-        // CE journal — une clé ne peut jamais écrire dans celui d'une autre.
-        check_journal_signature(journal, entry)?;
+        // Propriété structurelle : l'entrée doit être signée par la clé
+        // COURANTE de CE journal — la clé de genèse (l'identifiant), puis
+        // celle que chaque rotation journalisée délègue. Une clé ne peut
+        // jamais écrire dans le journal d'une autre. (Lecture avant la
+        // transaction d'écriture : redb admet lectures et écriture
+        // concurrentes, et l'écrivain est unique par construction.)
+        let stored = self.entries_of(journal)?;
+        let signing_key = crate::rotation::current_key(self, journal, &stored)?;
+        check_journal_signature(&signing_key, entry)?;
 
         // Empreinte de l'entrée COMPLÈTE (signature incluse).
         let hash = hash_canonical(entry)?;

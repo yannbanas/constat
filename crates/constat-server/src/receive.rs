@@ -33,9 +33,10 @@
 //! 3. exige un **graphe fermé** : chaque blob du lot est référencé par un
 //!    snapshot du lot, chaque snapshot par une entrée — un objet que rien
 //!    n'annonce (l'autre visage de l'altération en vol) est refusé aussi ;
-//! 4. vérifie que chaque entrée de journal est signée par la clé publique
-//!    annoncée, et que la chaîne `prev` se raccorde au **journal de cette
-//!    clé** déjà stocké ;
+//! 4. vérifie que chaque entrée de journal est signée par la clé
+//!    **courante** du journal annoncé (sa clé de genèse, puis celle que
+//!    chaque rotation journalisée délègue), et que la chaîne `prev` se
+//!    raccorde au **journal de cette identité** déjà stocké ;
 //! 5. valide **tout** le lot avant d'écrire quoi que ce soit : un lot refusé
 //!    ne laisse aucune écriture partielle, et l'agent peut le repousser tel
 //!    quel une fois la cause corrigée (idempotence).
@@ -47,20 +48,42 @@
 //! [`constat_store::MultiJournalStore`]) : deux agents peuvent pousser en
 //! entrelacé sans se marcher dessus, chaque chaîne restant vérifiable
 //! indépendamment. Une clé ne peut jamais écrire dans le journal d'une autre :
-//! chaque entrée est vérifiée contre la clé annoncée ici, et le magasin
+//! chaque entrée est vérifiée contre la clé du journal, et le magasin
 //! lui-même revérifie la signature à l'append — propriété structurelle,
 //! pas une politique.
+//!
+//! # Rotation de clé : l'identité du journal est la clé de GENÈSE
+//!
+//! Un agent peut tourner sa clé de signature (`constat-agent rotate-key`) :
+//! une entrée de **rotation** journalisée, signée par l'ancienne clé,
+//! délègue à la nouvelle (voir [`constat_store::rotation`]). Le serveur
+//! **suit la clé courante** de chaque journal : une poussée contenant une
+//! rotation valide bascule la validation des entrées suivantes sur la
+//! nouvelle clé.
+//!
+//! **Choix documenté** : le [`JournalId`] reste la clé de **genèse**, avant
+//! comme après toute rotation. L'identité du journal ne change pas — seule
+//! la clé de signature courante change. C'est ce qui garde stables :
+//! l'inventaire (`constat-server journals`/`status`), les exports
+//! (`pubkey.bin` = la genèse), et surtout l'**allowlist**
+//! ([`AgentPolicy::Allowlist`]) : elle liste des clés de genèse — des
+//! *identités* — donc une rotation ne casse jamais l'autorisation, et une
+//! révocation (`constat-server agents revoke`) retire l'identité entière,
+//! clé courante comprise. L'agent annonce d'ailleurs sa clé de genèse dans
+//! `agent_public_key` (dérivée de son magasin, voir
+//! `constat-agent/src/push.rs`).
 //!
 //! La couche transport (mTLS + HTTP) est dans [`crate::serve`] ; elle remet
 //! le lot décodé à cette interface, qui reste ainsi testable sans réseau.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use constat_model::{blob_hash, snapshot_hash, Blob, BlobHash, Snapshot};
+use constat_model::{blob_hash, snapshot_hash, Blob, BlobHash, CollectorId, Snapshot};
+use constat_store::rotation::{parse_rotation_blob, ROTATION_COLLECTOR};
 use constat_store::{
-    entry_hash, signable_bytes, JournalEntry, JournalId, MultiJournalStore, Signature, StoreError,
-    VerifyingKey,
+    current_key, entry_hash, signable_bytes, JournalEntry, JournalId, MultiJournalStore, Signature,
+    StoreError, VerifyingKey,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +91,10 @@ use serde::{Deserialize, Serialize};
 /// `constat-agent` (voir `crates/constat-agent/src/push.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushBatch {
-    /// Clé publique Ed25519 de l'agent émetteur (32 octets).
+    /// Clé publique Ed25519 de **GENÈSE** du journal de l'agent émetteur
+    /// (32 octets) : son **identité**, stable à travers les rotations de
+    /// clé. Les signatures des entrées, elles, se vérifient avec la clé
+    /// **courante** de la chaîne (voir le rustdoc du module).
     pub agent_public_key: [u8; 32],
     /// Machine concernée.
     pub asset: String,
@@ -116,6 +142,11 @@ pub enum ReceiveError {
     /// Une empreinte référencée est introuvable dans le lot et le magasin.
     #[error("référence non résoluble : {0}")]
     DanglingReference(String),
+    /// Une rotation de clé du lot est invalide : `old_key` n'est pas la clé
+    /// courante du journal (usurpation), déclaration illisible, ou blob de
+    /// rotation introuvable. Le lot est refusé avant toute écriture.
+    #[error("rotation de clé invalide : {0}")]
+    RotationInvalide(String),
     /// Un blob du lot n'est pas en forme canonique (faits non triés ou
     /// dupliqués) : son empreinte serait ambiguë, il est refusé.
     #[error("blob non canonique : {0}")]
@@ -158,6 +189,14 @@ pub enum PolicyError {
 /// - [`AgentPolicy::Allowlist`] (avec `--allowed-agents <fichier>`) : seules
 ///   les clés listées peuvent pousser ; clé absente = `403`, refusé avant
 ///   toute écriture.
+///
+/// **L'allowlist liste des clés de GENÈSE** — des *identités* de journaux,
+/// pas des clés de signature du moment. Une rotation de clé
+/// (`constat-agent rotate-key`) ne casse donc jamais l'autorisation : l'agent
+/// continue d'annoncer sa clé de genèse, et le serveur vérifie les
+/// signatures avec la clé courante de la chaîne. Inversement, une révocation
+/// (`constat-server agents revoke`) retire l'identité **entière** : plus
+/// aucune poussée sur ce journal, quelle que soit la clé courante.
 #[derive(Debug, Clone, Default)]
 pub enum AgentPolicy {
     /// Premier-arrivé-enregistré : toute clé peut créer son journal.
@@ -263,11 +302,13 @@ impl Receiver for StoreReceiver<'_> {
         // Phase 0 — autorisation, avant toute écriture (et avant tout
         // travail) : clé absente d'une allowlist = 403.
         // ------------------------------------------------------------------
+        // `journal` est la clé de GENÈSE : l'identité, stable à travers les
+        // rotations. L'allowlist autorise des identités (voir le rustdoc).
         let journal: JournalId = batch.agent_public_key;
         if !self.policy.allows(&journal) {
             return Err(ReceiveError::Forbidden(hex::encode(journal)));
         }
-        let key = VerifyingKey::from_bytes(&batch.agent_public_key).map_err(|e| {
+        VerifyingKey::from_bytes(&batch.agent_public_key).map_err(|e| {
             ReceiveError::BadSignature(format!("clé publique d'agent invalide : {e}"))
         })?;
 
@@ -350,17 +391,37 @@ impl Receiver for StoreReceiver<'_> {
             }
         }
 
-        // Entrées : signature vérifiée avec la clé annoncée, références de
-        // snapshots résolubles, chaîne `prev` raccordée au journal de CETTE
-        // clé (les autres journaux ne sont ni lus ni touchés). Les entrées
-        // déjà stockées dans ce journal (rejeu idempotent) sont admises.
-        let existing: BTreeSet<BlobHash> = self
-            .store
-            .entries_of(&journal)?
+        // Entrées : signature vérifiée avec la clé COURANTE du journal (la
+        // genèse, puis chaque rotation journalisée la remplace), références
+        // de snapshots résolubles, chaîne `prev` raccordée au journal de
+        // CETTE identité (les autres journaux ne sont ni lus ni touchés).
+        // Les entrées déjà stockées dans ce journal (rejeu idempotent) sont
+        // admises — leurs rotations sont déjà comptées par `current_key`.
+        let stored = self.store.entries_of(&journal)?;
+        let existing: BTreeSet<BlobHash> = stored.iter().map(|(hash, _)| *hash).collect();
+        let mut last = stored.last().map(|(hash, _)| *hash);
+        let current_bytes = current_key(&*self.store, &journal, &stored)?;
+        let mut current = VerifyingKey::from_bytes(&current_bytes).map_err(|e| {
+            ReceiveError::RotationInvalide(format!(
+                "la clé courante du journal n'est pas une clé Ed25519 valide : {e}"
+            ))
+        })?;
+        drop(stored);
+
+        // Index du lot pour résoudre les enregistrements de rotation :
+        // snapshot → objet, blob → objet (les empreintes sont RECALCULÉES).
+        let snapshot_by_hash: BTreeMap<BlobHash, &Snapshot> = snapshot_hashes
             .iter()
-            .map(|(hash, _)| *hash)
+            .copied()
+            .zip(batch.snapshots.iter())
             .collect();
-        let mut last = self.store.last_entry_of(&journal)?.map(|(hash, _)| hash);
+        let blob_by_hash: BTreeMap<BlobHash, &Blob> = blob_hashes
+            .iter()
+            .copied()
+            .zip(batch.blobs.iter())
+            .collect();
+        let rotation_collector = CollectorId(ROTATION_COLLECTOR.to_string());
+
         let mut new_entries: Vec<&JournalEntry> = Vec::new();
         for (index, entry) in batch.entries.iter().enumerate() {
             let hash = entry_hash(entry).map_err(StoreError::from)?;
@@ -382,9 +443,10 @@ impl Receiver for StoreReceiver<'_> {
                     entry.signature.len()
                 ))
             })?;
-            key.verify_strict(&bytes, &signature).map_err(|_| {
+            current.verify_strict(&bytes, &signature).map_err(|_| {
                 ReceiveError::BadSignature(format!(
-                    "entrée {index} : la signature ne vérifie pas avec la clé annoncée"
+                    "entrée {index} : la signature ne vérifie pas avec la clé courante \
+                     du journal de cette identité"
                 ))
             })?;
             if entry.prev != last {
@@ -398,6 +460,48 @@ impl Receiver for StoreReceiver<'_> {
                     last.map(|h| h.to_hex()).unwrap_or_else(|| "absent".into()),
                 )));
             }
+
+            // Rotations portées par cette entrée : l'entrée est signée par
+            // l'ancienne clé (vérifié ci-dessus), `old_key` doit être la clé
+            // courante — sinon usurpation, lot refusé — puis la clé courante
+            // bascule pour les entrées suivantes du lot.
+            for snapshot_hash in &entry.snapshots {
+                let snapshot: Snapshot = match snapshot_by_hash.get(snapshot_hash) {
+                    Some(snapshot) => (*snapshot).clone(),
+                    None => self.store.get_snapshot(snapshot_hash)?,
+                };
+                let Some(rotation_blob_hash) = snapshot.blobs.get(&rotation_collector) else {
+                    continue;
+                };
+                let blob: Blob = match blob_by_hash.get(rotation_blob_hash) {
+                    Some(blob) => (*blob).clone(),
+                    None => self.store.get_blob(rotation_blob_hash).map_err(|e| {
+                        ReceiveError::RotationInvalide(format!(
+                            "entrée {index} : blob de rotation {} introuvable : {e}",
+                            rotation_blob_hash.to_hex()
+                        ))
+                    })?,
+                };
+                let declaration = parse_rotation_blob(&blob).map_err(|e| {
+                    ReceiveError::RotationInvalide(format!(
+                        "entrée {index} : déclaration illisible : {e}"
+                    ))
+                })?;
+                if declaration.old_key != current.to_bytes() {
+                    return Err(ReceiveError::RotationInvalide(format!(
+                        "entrée {index} : old_key = {} mais la clé courante du journal \
+                         est {} — tentative d'usurpation",
+                        hex::encode(declaration.old_key),
+                        hex::encode(current.to_bytes())
+                    )));
+                }
+                current = VerifyingKey::from_bytes(&declaration.new_key).map_err(|e| {
+                    ReceiveError::RotationInvalide(format!(
+                        "entrée {index} : nouvelle clé invalide : {e}"
+                    ))
+                })?;
+            }
+
             last = Some(hash);
             new_entries.push(entry);
         }
@@ -712,6 +816,208 @@ mod tests {
         let err = StoreReceiver::new(&mut store).receive(batch).unwrap_err();
         assert!(matches!(err, ReceiveError::DanglingReference(_)), "{err}");
         assert_eq!(store.blob_count(), 0);
+    }
+
+    /// Construit le lot depuis un magasin d'agent existant, comme le fait
+    /// `constat-agent` : tout le contenu, clé de GENÈSE annoncée.
+    fn batch_from_store(store: &MemoryStore, genesis: [u8; 32], asset: &str) -> PushBatch {
+        let mut blobs = Vec::new();
+        let mut snapshots = Vec::new();
+        let mut entries = Vec::new();
+        let mut seen_blobs = BTreeSet::new();
+        let mut seen_snapshots = BTreeSet::new();
+        for (_, entry) in store.entries().unwrap() {
+            for snapshot_hash in &entry.snapshots {
+                if seen_snapshots.insert(*snapshot_hash) {
+                    let snapshot = store.get_snapshot(snapshot_hash).unwrap();
+                    for blob_hash in snapshot.blobs.values() {
+                        if seen_blobs.insert(*blob_hash) {
+                            blobs.push(store.get_blob(blob_hash).unwrap());
+                        }
+                    }
+                    snapshots.push(snapshot);
+                }
+            }
+            entries.push(entry);
+        }
+        PushBatch {
+            agent_public_key: genesis,
+            asset: asset.into(),
+            blobs,
+            snapshots,
+            entries,
+        }
+    }
+
+    fn collecte_locale(store: &mut MemoryStore, signer: &Signer, at: i64, contenu: &str) {
+        let blob = Blob::new(
+            "linux.sshd",
+            format!("PermitRootLogin no # {contenu}\n").into_bytes(),
+            vec![Fact::new("service:sshd", "sshd.PermitRootLogin", "no")],
+        );
+        let hash = store.put_blob(&blob).unwrap();
+        let snapshot = Snapshot::new(
+            "srv-01",
+            Timestamp(at),
+            BTreeMap::from([("linux.sshd".into(), hash)]),
+        );
+        let snapshot_hash = store.put_snapshot(&snapshot).unwrap();
+        append_signed(store, signer, vec![snapshot_hash], Timestamp(at)).unwrap();
+    }
+
+    /// Rotation puis poussée : l'agent tourne sa clé, repousse tout le
+    /// magasin — le serveur SUIT la clé courante, range dans le journal de
+    /// GENÈSE, et le Receipt reste correct. Une TIERCE clé qui tente de
+    /// pousser sur ce journal reste refusée.
+    #[test]
+    fn rotation_puis_poussee_le_serveur_suit_la_cle_courante() {
+        use constat_store::{rotate_key, verify_chain_rotated};
+
+        let old = Signer::generate();
+        let new = Signer::generate();
+        let genesis = old.verifying_key().to_bytes();
+
+        // L'agent : collecte, pousse, tourne sa clé, recollecte, repousse.
+        let mut agent = MemoryStore::new();
+        collecte_locale(&mut agent, &old, 1_000, "avant rotation");
+        let mut server = MemoryStore::new();
+        StoreReceiver::new(&mut server)
+            .receive(batch_from_store(&agent, genesis, "srv-01"))
+            .unwrap();
+
+        rotate_key(
+            &mut agent,
+            &old,
+            &new,
+            Some("rotation planifiée"),
+            Timestamp(2_000),
+        )
+        .unwrap();
+        collecte_locale(&mut agent, &new, 3_000, "après rotation");
+
+        let receipt = StoreReceiver::new(&mut server)
+            .receive(batch_from_store(&agent, genesis, "srv-01"))
+            .unwrap();
+
+        // Le journal reste celui de la GENÈSE (l'identité n'a pas changé)…
+        let entries = server.entries_of(&genesis).unwrap();
+        assert_eq!(entries.len(), 3); // collecte + rotation + collecte
+        assert_eq!(server.journals().unwrap(), vec![genesis]);
+        assert_eq!(receipt.journal_root, server.root_of(&genesis).unwrap());
+        // …et la chaîne serveur se vérifie en suivant la clé courante.
+        let trace = verify_chain_rotated(&server, &entries, &old.verifying_key()).unwrap();
+        assert_eq!(trace.rotations, 1);
+        assert_eq!(trace.final_key, new.verifying_key().to_bytes());
+
+        // Une TIERCE clé qui annonce cette identité et pousse une entrée à
+        // elle : refusée — sa signature n'est pas celle de la clé courante.
+        let third = Signer::generate();
+        let root = server.root_of(&genesis).unwrap();
+        let forged = third.sign_entry(root, vec![], Timestamp(4_000)).unwrap();
+        let vol = PushBatch {
+            agent_public_key: genesis,
+            asset: "srv-01".into(),
+            blobs: vec![],
+            snapshots: vec![],
+            entries: vec![forged],
+        };
+        let err = StoreReceiver::new(&mut server).receive(vol).unwrap_err();
+        assert!(matches!(err, ReceiveError::BadSignature(_)), "{err}");
+        // Et l'ANCIENNE clé non plus : elle a délégué.
+        let stale = old.sign_entry(root, vec![], Timestamp(4_000)).unwrap();
+        let vol = PushBatch {
+            agent_public_key: genesis,
+            asset: "srv-01".into(),
+            blobs: vec![],
+            snapshots: vec![],
+            entries: vec![stale],
+        };
+        let err = StoreReceiver::new(&mut server).receive(vol).unwrap_err();
+        assert!(matches!(err, ReceiveError::BadSignature(_)), "{err}");
+        assert_eq!(server.entries_of(&genesis).unwrap().len(), 3);
+    }
+
+    /// Une rotation usurpée dans le lot (old_key ≠ clé courante du journal)
+    /// est refusée AVANT toute écriture.
+    #[test]
+    fn rotation_usurpee_dans_le_lot_refusee() {
+        use constat_store::rotation::{build_rotation_blob, ROTATION_COLLECTOR};
+        use constat_store::RotationDeclaration;
+
+        let legitimate = Signer::generate();
+        let attacker = Signer::generate();
+        let genesis = legitimate.verifying_key().to_bytes();
+
+        let mut agent = MemoryStore::new();
+        collecte_locale(&mut agent, &legitimate, 1_000, "légitime");
+        // « Rotation » dont old_key est la clé de l'attaquant, signée par la
+        // clé légitime (le détenteur peut signer ce qu'il veut — c'est le
+        // old_key ≠ courante qui doit être refusé).
+        let declaration = RotationDeclaration {
+            old_key: attacker.verifying_key().to_bytes(),
+            new_key: Signer::generate().verifying_key().to_bytes(),
+            reason: None,
+        };
+        let blob = build_rotation_blob(&declaration, Timestamp(2_000));
+        let blob_hash = agent.put_blob(&blob).unwrap();
+        let snapshot = Snapshot::new(
+            "constat",
+            Timestamp(2_000),
+            BTreeMap::from([(ROTATION_COLLECTOR.into(), blob_hash)]),
+        );
+        let snapshot_hash = agent.put_snapshot(&snapshot).unwrap();
+        append_signed(
+            &mut agent,
+            &legitimate,
+            vec![snapshot_hash],
+            Timestamp(2_000),
+        )
+        .unwrap();
+
+        let mut server = MemoryStore::new();
+        let err = StoreReceiver::new(&mut server)
+            .receive(batch_from_store(&agent, genesis, "srv-01"))
+            .unwrap_err();
+        assert!(matches!(err, ReceiveError::RotationInvalide(_)), "{err}");
+        // Refus avant toute écriture : rien dans le magasin serveur.
+        assert!(server.journals().unwrap().is_empty());
+        assert_eq!(server.blob_count(), 0);
+    }
+
+    /// L'allowlist autorise des identités de GENÈSE : une rotation ne casse
+    /// pas l'autorisation ; retirer la clé (revoke) la casse — l'identité
+    /// entière, clé courante comprise.
+    #[test]
+    fn allowlist_par_identite_de_genese_rotation_puis_revocation() {
+        use constat_store::rotate_key;
+
+        let old = Signer::generate();
+        let new = Signer::generate();
+        let genesis = old.verifying_key().to_bytes();
+        let policy = AgentPolicy::Allowlist(BTreeSet::from([genesis]));
+
+        let mut agent = MemoryStore::new();
+        collecte_locale(&mut agent, &old, 1_000, "avant");
+        rotate_key(&mut agent, &old, &new, None, Timestamp(2_000)).unwrap();
+        collecte_locale(&mut agent, &new, 3_000, "après");
+
+        // Rotation faite : la poussée passe TOUJOURS — l'identité (genèse)
+        // est autorisée, peu importe la clé courante.
+        let mut server = MemoryStore::new();
+        StoreReceiver::with_policy(&mut server, policy)
+            .receive(batch_from_store(&agent, genesis, "srv-01"))
+            .unwrap();
+        assert_eq!(server.entries_of(&genesis).unwrap().len(), 3);
+
+        // Révocation : l'identité est retirée de la liste — plus AUCUNE
+        // poussée sur ce journal, y compris signée par la clé courante.
+        let revoked = AgentPolicy::Allowlist(BTreeSet::new());
+        collecte_locale(&mut agent, &new, 4_000, "après révocation");
+        let err = StoreReceiver::with_policy(&mut server, revoked)
+            .receive(batch_from_store(&agent, genesis, "srv-01"))
+            .unwrap_err();
+        assert!(matches!(err, ReceiveError::Forbidden(_)), "{err}");
+        assert_eq!(server.entries_of(&genesis).unwrap().len(), 3);
     }
 
     /// Un blob non canonique (faits non triés) serait ambigu : refusé.

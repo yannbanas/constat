@@ -50,6 +50,10 @@
 //!   - les **enregistrements de purge** eux-mêmes (blob `constat.purge` et son
 //!     snapshot), quel que soit leur âge : les supprimer effacerait la
 //!     déclaration dont les exports ont besoin pour rester vérifiables ;
+//!   - les **enregistrements de rotation de clé** (blob `constat.rotation` et
+//!     son snapshot, [`crate::rotation`]) : les supprimer rendrait la clé
+//!     courante indéterminable, donc toute la suite de la chaîne
+//!     invérifiable ;
 //!   - tout objet atteignable depuis un **journal nommé** (multi-agents,
 //!     [`crate::MultiJournalStore`]) : la purge ne déclare que dans le journal
 //!     par défaut, elle n'a donc pas le droit de trouer les chaînes des autres
@@ -385,9 +389,10 @@ impl PurgePlan {
 /// Règles (voir la documentation du module) :
 ///
 /// - candidats : snapshots du journal par défaut avec `at < cutoff`, hors
-///   enregistrements de purge ([`PURGE_COLLECTOR`]), encore présents ;
-/// - conservés : tout snapshot restant, tout enregistrement de purge, et
-///   toute la clôture des **journaux nommés** ;
+///   enregistrements de purge ([`PURGE_COLLECTOR`]) et de **rotation de
+///   clé** ([`crate::rotation::ROTATION_COLLECTOR`]), encore présents ;
+/// - conservés : tout snapshot restant, tout enregistrement de purge ou de
+///   rotation, et toute la clôture des **journaux nommés** ;
 /// - blobs supprimés : référencés uniquement par des snapshots candidats.
 ///
 /// Retourne `None` si rien n'est à purger (rejouer une purge est sans effet).
@@ -396,6 +401,7 @@ pub fn plan_purge<S: MultiJournalStore + ?Sized>(
     cutoff: Timestamp,
 ) -> Result<Option<PurgePlan>, StoreError> {
     let purge_collector = CollectorId(PURGE_COLLECTOR.to_string());
+    let rotation_collector = CollectorId(crate::rotation::ROTATION_COLLECTOR.to_string());
 
     // 1. Clôture des journaux nommés : tout y est conservé — la purge ne
     //    déclare que dans le journal par défaut (voir le rustdoc du module).
@@ -426,8 +432,13 @@ pub fn plan_purge<S: MultiJournalStore + ?Sized>(
                 continue;
             }
             let snapshot = store.get_snapshot(snapshot_hash)?;
-            let is_purge_record = snapshot.blobs.contains_key(&purge_collector);
-            if snapshot.at < cutoff && !is_purge_record {
+            // Jamais purgés : les enregistrements de purge (la déclaration
+            // dont les exports ont besoin) et les enregistrements de
+            // ROTATION — purger une rotation rendrait la clé courante
+            // indéterminable, donc toute la suite de la chaîne invérifiable.
+            let is_reserved_record = snapshot.blobs.contains_key(&purge_collector)
+                || snapshot.blobs.contains_key(&rotation_collector);
+            if snapshot.at < cutoff && !is_reserved_record {
                 candidates.insert(*snapshot_hash, snapshot);
             } else {
                 kept_snapshots.insert(*snapshot_hash);

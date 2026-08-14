@@ -9,6 +9,66 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ### Ajouté
 
+- **Gestion et rotation des clés de signature** (bloquant de production) —
+  une rotation est un constat réservé, sur le modèle de la purge : blob
+  `constat.rotation` (faits `rotation.old_key`/`rotation.new_key` en
+  `Fingerprint`, `rotation.reason` optionnel, document brut lisible),
+  référencé par une **nouvelle entrée signée par l'ANCIENNE clé** — c'est
+  elle qui délègue ; les entrées suivantes sont signées par la nouvelle.
+  Tout est additif : journaux et exports existants restent valides tels
+  quels, empreintes de `constat-model` intactes.
+  - **Magasin** (`constat-store`) : module `rotation` — `rotate_key`,
+    `current_key` (la clé de genèse, puis chaque rotation valide la
+    remplace), `genesis_key` (retrouve l'identité depuis le journal),
+    `verify_chain_rotated` (suit la clé courante ; nouvelle variante
+    `ChainError::RotationInvalide` : une rotation dont `old_key` n'est pas
+    la clé courante est une usurpation, chaîne refusée). La garde
+    structurelle `append_entry_in` suit la clé courante : après rotation,
+    seule la clé déléguée écrit dans le journal (nommé par la clé de
+    GENÈSE — l'identité ne change pas). Purge × rotation : un
+    enregistrement de rotation n'est **jamais** purgeable (même règle que
+    les enregistrements de purge) — le purger rendrait toute la suite de
+    la chaîne invérifiable.
+  - **Vérificateur** (`constat-verify`) : les signatures se vérifient avec
+    la clé courante — `pubkey.bin` (la genèse, inchangé) jusqu'à la
+    première rotation valide, puis la clé déléguée ; sortie « N
+    rotation(s) de clé, clé finale <hex abrégé> », nouveaux champs
+    `rotation_count`/`final_key`, nouvelle erreur `RotationInvalide`
+    (usurpation, déclaration illisible, ou blob de rotation absent — même
+    déclaré purgé). FORMAT.md : nouvelle section normative « 4 ter.
+    Rotation de clé » (algorithme exact, note de version : un vérificateur
+    antérieur échoue sûrement, jamais de faux OK).
+  - **Agent** : `constat-agent rotate-key [--keys] [--reason] [--store]` —
+    refuse si le magasin est inaccessible (une rotation non journalisée
+    n'existe pas), écrit l'entrée de rotation signée par l'ancienne clé,
+    archive l'ancienne paire (`agent.key.<date>.old`,
+    `agent.pub.<date>.old`, permissions conservées) et met la nouvelle en
+    place ; affiche anciennes/nouvelles empreintes et le rappel
+    d'allowlist. La poussée annonce désormais la clé de **GENÈSE**
+    (l'identité, dérivée du journal par `genesis_key`) — inchangée tant
+    qu'aucune rotation n'a eu lieu.
+  - **Serveur** : le `StoreReceiver` suit la clé courante de chaque
+    journal (une poussée contenant une rotation valide bascule la
+    validation ; nouvelle erreur `RotationInvalide`, lot refusé avant
+    toute écriture). Le `JournalId` reste la clé de GENÈSE — choix
+    documenté : l'identité du journal ne change pas, seule la clé de
+    signature courante change ; l'allowlist liste donc des identités, une
+    rotation ne casse jamais l'autorisation, une révocation retire
+    l'identité entière. Sous-commandes `constat-server agents --file <f>
+    list|add <hex> [nom]|remove <hex>|revoke <hex>` : édition propre du
+    fichier d'allowlist (commentaires et ordre préservés, nom en
+    commentaire de fin de ligne), révocation **tracée** par une note datée
+    dans le fichier.
+  - **CLI** : `constat export` vérifie la chaîne en suivant les rotations
+    et écrit dans `pubkey.bin` la clé de genèse retrouvée depuis le
+    journal (la clé fournie via `--pubkey`/`--keys` est la clé courante).
+  - **Docs** : `docs/cles.md` — cycle de vie complet en français :
+    génération, garde (pourquoi on ne sauvegarde PAS la clé privée : elle
+    est remplaçable par rotation, une copie est un risque ; perte sans
+    rotation = nouveau journal, ancienne chaîne close et toujours
+    vérifiable), rotation planifiée (cadence recommandée), compromission
+    (révocation + rotation + ancrage + investigation depuis la dernière
+    racine ancrée, en lien avec §6.2), lien avec l'ancrage externe.
 - **Purge de rétention journalisée** (§16, bloquant de production) — un trou
   non déclaré est indistinguable d'un effacement malveillant ; la purge
   déclare donc **qu'elle a eu lieu**, sur quelle période et pour quel motif,

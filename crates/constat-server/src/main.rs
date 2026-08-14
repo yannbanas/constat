@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use constat_server::receive::AgentPolicy;
-use constat_server::{inventory, monitor, serve};
+use constat_server::{agents, inventory, monitor, serve};
 use constat_store::RedbStore;
 use miette::miette;
 
@@ -75,6 +75,20 @@ enum Command {
         #[arg(long, value_name = "CHEMIN")]
         store: Option<PathBuf>,
     },
+    /// Gère le fichier d'agents autorisés (--allowed-agents) : liste,
+    /// ajout, retrait, révocation tracée. Les clés sont des clés de
+    /// GENÈSE — des identités : une rotation de clé d'agent ne demande
+    /// aucune modification ici, une révocation retire l'identité entière.
+    /// Le fichier est préservé (commentaires, ordre) ; relancez le serveur
+    /// pour prendre en compte la modification.
+    Agents {
+        /// Le fichier d'agents autorisés à éditer (celui de
+        /// --allowed-agents)
+        #[arg(long, value_name = "FICHIER")]
+        file: PathBuf,
+        #[command(subcommand)]
+        action: AgentsAction,
+    },
     /// Supervision : par journal/agent, dernière entrée, âge, entrées,
     /// racine. Code de sortie 1 si un journal dépasse --max-age ou si
     /// l'inventaire s'écarte de --expected — utilisable tel quel en check
@@ -99,6 +113,34 @@ enum Command {
         /// (§10.2) — code de sortie 1.
         #[arg(long, value_name = "FICHIER")]
         expected: Option<PathBuf>,
+    },
+}
+
+/// Actions de `constat-server agents`.
+#[derive(Subcommand)]
+enum AgentsAction {
+    /// Liste les agents autorisés (clé de genèse, nom éventuel)
+    List,
+    /// Ajoute une clé de genèse (le nom devient un commentaire de fin de
+    /// ligne). Crée le fichier s'il n'existe pas.
+    Add {
+        /// Clé publique Ed25519 de genèse, 64 caractères hexadécimaux
+        /// (le contenu d'agent.pub d'origine)
+        key: String,
+        /// Nom lisible de l'agent (optionnel)
+        name: Option<String>,
+    },
+    /// Retire une clé de genèse (l'identité entière, rotations comprises)
+    Remove {
+        /// Clé publique Ed25519 de genèse, 64 caractères hexadécimaux
+        key: String,
+    },
+    /// Révoque une clé de genèse : retrait + note datée en commentaire —
+    /// la révocation est tracée dans le fichier. Procédure complète de
+    /// compromission : docs/cles.md
+    Revoke {
+        /// Clé publique Ed25519 de genèse, 64 caractères hexadécimaux
+        key: String,
     },
 }
 
@@ -227,12 +269,87 @@ fn main() -> miette::Result<()> {
             print!("{}", inventory::render(&rows));
             Ok(())
         }
+        Command::Agents { file, action } => cmd_agents(&file, action),
         Command::Status {
             store,
             max_age,
             format,
             expected,
         } => cmd_status(store, max_age, format, expected),
+    }
+}
+
+/// `constat-server agents` : édite le fichier d'agents autorisés en le
+/// préservant (commentaires, ordre). Les transformations sont pures
+/// ([`agents`]) ; cette fonction ne fait que lire et réécrire le fichier.
+fn cmd_agents(file: &Path, action: AgentsAction) -> miette::Result<()> {
+    let read = |must_exist: bool| -> miette::Result<String> {
+        match std::fs::read_to_string(file) {
+            Ok(text) => Ok(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !must_exist => Ok(String::new()),
+            Err(e) => Err(miette!(
+                help = "indiquez avec --file le fichier passé au serveur via --allowed-agents",
+                "fichier d'agents autorisés illisible ({}) : {e}",
+                file.display()
+            )),
+        }
+    };
+    let write = |text: String| -> miette::Result<()> {
+        std::fs::write(file, text)
+            .map_err(|e| miette!("impossible d'écrire {} : {e}", file.display()))?;
+        println!(
+            "{} mis à jour. Relancez le serveur (ou attendez son prochain démarrage) \
+             pour prendre en compte la modification.",
+            file.display()
+        );
+        Ok(())
+    };
+    match action {
+        AgentsAction::List => {
+            let rows = agents::list(&read(true)?)?;
+            if rows.is_empty() {
+                println!(
+                    "Aucun agent autorisé dans {} : TOUTE poussée est refusée tant que \
+                     ce fichier est passé via --allowed-agents.",
+                    file.display()
+                );
+                return Ok(());
+            }
+            println!("Agents autorisés ({}) — clés de GENÈSE :", file.display());
+            for row in rows {
+                match row.name {
+                    Some(name) => println!("  {}  {name}", row.key_hex),
+                    None => println!("  {}", row.key_hex),
+                }
+            }
+            Ok(())
+        }
+        AgentsAction::Add { key, name } => {
+            let text = agents::add(&read(false)?, &key, name.as_deref())?;
+            write(text)
+        }
+        AgentsAction::Remove { key } => {
+            let text = agents::remove(&read(true)?, &key)?;
+            write(text)
+        }
+        AgentsAction::Revoke { key } => {
+            // L'horloge n'entre qu'ici : la note de révocation est datée du
+            // jour, le module reste pur et testable.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| constat_model::Timestamp(d.as_millis() as i64))
+                .unwrap_or(constat_model::Timestamp::UNIX_EPOCH);
+            let date = now.to_rfc3339().unwrap_or_else(|_| format!("{} ms", now.0));
+            let text = agents::revoke(&read(true)?, &key, &date)?;
+            write(text)?;
+            println!(
+                "Révocation tracée dans le fichier. Rappel (docs/cles.md) : révoquer \
+                 côté serveur n'est que la première étape d'une compromission — ancrez \
+                 la racine du journal concerné et investiguez depuis la dernière racine \
+                 ancrée."
+            );
+            Ok(())
+        }
     }
 }
 

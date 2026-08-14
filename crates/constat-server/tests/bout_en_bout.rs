@@ -405,6 +405,95 @@ fn allowlist_cle_absente_refusee_403() {
     }
 }
 
+/// Rotation de clé bout-en-bout, sur le vrai transport : l'agent pousse,
+/// tourne sa clé (`constat_store::rotate_key`, ce que fait
+/// `constat-agent rotate-key`), recollecte et repousse — `build_batch`
+/// annonce la clé de GENÈSE (l'identité), le serveur suit la clé courante,
+/// le Receipt/la racine restent corrects. Une TIERCE clé qui tente de
+/// pousser sur ce journal reste refusée.
+#[test]
+fn rotation_puis_poussee_bout_en_bout() {
+    use constat_store::{rotate_key, verify_chain_rotated};
+
+    let pki = TestPki::generate("rotation");
+    let (addr, server_store) = start_server(&pki);
+    let config = pki.push_config(addr);
+
+    let (mut agent_store, old) = fill_agent_store(1);
+    let genesis = old.verifying_key().to_bytes();
+
+    // Première poussée, avant rotation : la clé courante EST la genèse.
+    let batch = build_batch(&agent_store, genesis, "srv-01".into()).unwrap();
+    assert_eq!(batch.agent_public_key, genesis);
+    push(&config, &batch).unwrap();
+
+    // Rotation locale, puis nouvelle collecte signée par la NOUVELLE clé.
+    let new = Signer::generate();
+    rotate_key(
+        &mut agent_store,
+        &old,
+        &new,
+        Some("rotation planifiée"),
+        Timestamp(5_000),
+    )
+    .unwrap();
+    add_collecte(&mut agent_store, &new, "srv-01", 9);
+
+    // Repoussée : build_batch retrouve la GENÈSE dans le journal, même si
+    // la clé fournie est la clé courante (le nouvel agent.pub).
+    let batch = build_batch(
+        &agent_store,
+        new.verifying_key().to_bytes(),
+        "srv-01".into(),
+    )
+    .unwrap();
+    assert_eq!(
+        batch.agent_public_key, genesis,
+        "le lot annonce l'identité (genèse), pas la clé courante"
+    );
+    push(&config, &batch).unwrap();
+
+    {
+        let guard = server_store.lock().unwrap();
+        // Un seul journal : celui de l'identité de genèse.
+        assert_eq!(guard.journals().unwrap(), vec![genesis]);
+        let entries = guard.entries_of(&genesis).unwrap();
+        assert_eq!(entries, agent_store.entries().unwrap());
+        assert_eq!(
+            guard.root_of(&genesis).unwrap(),
+            agent_store.root().unwrap()
+        );
+        // La chaîne serveur se vérifie en suivant la clé courante.
+        let trace = verify_chain_rotated(&*guard, &entries, &old.verifying_key()).unwrap();
+        assert_eq!(trace.rotations, 1);
+        assert_eq!(trace.final_key, new.verifying_key().to_bytes());
+    }
+
+    // Une TIERCE clé forge une entrée sur ce journal : 422, rien ne bouge.
+    let third = Signer::generate();
+    let root = agent_store.root().unwrap();
+    let forged = third.sign_entry(root, vec![], Timestamp(9_000)).unwrap();
+    let vol = PushBatch {
+        agent_public_key: genesis,
+        asset: "srv-01".into(),
+        blobs: vec![],
+        snapshots: vec![],
+        entries: vec![forged],
+    };
+    let err = push(&config, &vol).unwrap_err();
+    assert!(
+        matches!(err, PushError::Refused { status: 422 }),
+        "attendu un refus 422, obtenu : {err}"
+    );
+    {
+        let guard = server_store.lock().unwrap();
+        assert_eq!(
+            guard.entries_of(&genesis).unwrap(),
+            agent_store.entries().unwrap()
+        );
+    }
+}
+
 /// Un client sans certificat est refusé à la poignée de main : le mTLS n'est
 /// pas optionnel, il n'existe pas de mode « anonyme ».
 #[test]

@@ -60,8 +60,12 @@ use serde::{Deserialize, Serialize};
 /// ainsi vérifier chaque référence au moment où il la rencontre.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushBatch {
-    /// Clé publique Ed25519 de l'agent (32 octets) : identifie la source et
-    /// permet au serveur de vérifier les signatures des entrées.
+    /// Clé publique Ed25519 de **GENÈSE** du journal (32 octets) :
+    /// l'**identité** de l'agent, stable à travers les rotations de clé.
+    /// C'est elle qui nomme le journal côté serveur et qu'une allowlist
+    /// autorise ; le serveur vérifie ensuite les signatures avec la clé
+    /// **courante** de la chaîne (la genèse, puis chaque rotation
+    /// journalisée la remplace — voir `constat_store::rotation`).
     pub agent_public_key: [u8; 32],
     /// Machine concernée (redondant avec les snapshots, mais permet le
     /// contrôle d'inventaire attendu/observé côté serveur).
@@ -167,9 +171,16 @@ pub enum PushError {
 /// Émettre l'intégralité du magasin à chaque poussée est volontaire : la
 /// réception est idempotente (adressage par contenu), donc la reprise après
 /// coupure ne demande aucun état côté agent — rejouer est sans effet.
+///
+/// `current_public_key` est la clé publique **courante** de l'agent (celle
+/// de son fichier `agent.pub`). Le lot annonce, lui, la clé de **GENÈSE**
+/// du journal — l'identité, stable à travers les rotations — dérivée du
+/// magasin ([`constat_store::genesis_key`]) : la genèse est l'`old_key` de
+/// la première rotation journalisée, et la clé courante s'il n'y en a
+/// aucune.
 pub fn build_batch(
     store: &dyn Store,
-    agent_public_key: [u8; 32],
+    current_public_key: [u8; 32],
     asset: String,
 ) -> Result<PushBatch, PushError> {
     let mut blobs = Vec::new();
@@ -178,7 +189,9 @@ pub fn build_batch(
     let mut seen_blobs = BTreeSet::new();
     let mut seen_snapshots = BTreeSet::new();
 
-    for (_, entry) in store.entries()? {
+    let stored = store.entries()?;
+    let agent_public_key = constat_store::genesis_key(store, &stored, &current_public_key)?;
+    for (_, entry) in stored {
         for snapshot_hash in &entry.snapshots {
             if seen_snapshots.insert(*snapshot_hash) {
                 let snapshot = store.get_snapshot(snapshot_hash)?;

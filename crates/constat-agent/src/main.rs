@@ -98,6 +98,23 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Tourne la clé de signature : génère une nouvelle paire, écrit dans le
+    /// journal une entrée de rotation signée par l'ANCIENNE clé (c'est elle
+    /// qui délègue), archive l'ancienne paire et met la nouvelle en place.
+    /// Refuse si le magasin est inaccessible : une rotation non journalisée
+    /// n'existe pas.
+    RotateKey {
+        /// Répertoire des clés de signature
+        #[arg(long, value_name = "DOSSIER")]
+        keys: Option<PathBuf>,
+        /// Motif de la rotation, consigné dans le journal (ex. « rotation
+        /// planifiée », « compromission suspectée »)
+        #[arg(long, value_name = "MOTIF")]
+        reason: Option<String>,
+        /// Chemin du magasin local (sinon CONSTAT_STORE, sinon ./constat.redb)
+        #[arg(long, value_name = "CHEMIN")]
+        store: Option<PathBuf>,
+    },
     /// Pousse le magasin local vers le serveur (mTLS sortant, idempotent)
     Push {
         /// URL du serveur, ex. https://constat.interne:8443 (https obligatoire)
@@ -337,6 +354,11 @@ fn main() -> miette::Result<()> {
             );
             Ok(())
         }
+        Command::RotateKey {
+            keys: keys_dir,
+            reason,
+            store,
+        } => cmd_rotate_key(keys_dir, reason, store),
         Command::Push {
             server,
             cert,
@@ -572,6 +594,90 @@ fn cmd_run_every(every: &str, max_cycles: Option<u64>, config: &RunConfig) -> mi
             println!("la boucle continue — le trou de collecte restera déclaré, pas masqué.");
         }
     });
+    Ok(())
+}
+
+/// `constat-agent rotate-key` : rotation de la clé de signature,
+/// **journalisée d'abord** — une rotation qui n'est pas dans le journal
+/// n'existe pas, donc le magasin doit être accessible avant tout.
+///
+/// Ordre des opérations, pensé pour qu'aucune panne ne perde la clé :
+/// 1. charger l'ancienne clé, ouvrir le magasin (refus s'il n'existe pas) ;
+/// 2. générer la nouvelle paire et l'écrire sur disque sous des noms
+///    temporaires (`agent.key.new`) — durable AVANT d'être désignée ;
+/// 3. écrire l'entrée de rotation, signée par l'ANCIENNE clé
+///    ([`constat_store::rotate_key`]) ;
+/// 4. archiver l'ancienne paire (`agent.key.<date>.old`, permissions
+///    conservées par le renommage) et mettre la nouvelle en place.
+///
+/// Si l'étape 4 échoue, l'erreur explique comment terminer à la main : la
+/// nouvelle clé privée est déjà durable dans `agent.key.new`.
+fn cmd_rotate_key(
+    keys_dir: Option<PathBuf>,
+    reason: Option<String>,
+    store_flag: Option<PathBuf>,
+) -> miette::Result<()> {
+    let dir = keys::resolve_keys_dir(keys_dir);
+    let old = keys::load(&dir)?;
+
+    // Le magasin d'abord : une rotation non journalisée n'existe pas. Un
+    // chemin sans fichier signifie qu'aucun journal n'existe ici — refus,
+    // jamais de création silencieuse d'un magasin vide pour y « journaliser ».
+    let store_path = storeopen::resolve_store_path(store_flag);
+    if !store_path.exists() {
+        return Err(miette!(
+            help = "une rotation non journalisée n'existe pas : la délégation doit être \
+                    écrite dans le journal, signée par l'ancienne clé. Lancez d'abord \
+                    `constat-agent run --once`, ou désignez le magasin avec --store ou \
+                    CONSTAT_STORE",
+            "aucun magasin à {} : rotation refusée",
+            store_path.display()
+        ));
+    }
+    let mut store = storeopen::open_store(&store_path)?;
+
+    let now = run::now_ms();
+    let new = Signer::generate();
+
+    // La nouvelle clé privée est durable sur disque AVANT que le journal ne
+    // la désigne comme courante.
+    let (key_tmp, pub_tmp) = keys::stage_new_keys(&dir, &new)?;
+
+    let (root, _entry) =
+        constat_store::rotate_key(store.as_mut(), &old, &new, reason.as_deref(), now).map_err(
+            |e| {
+                // Rien n'a été journalisé : les fichiers temporaires sont retirés,
+                // l'état d'avant la commande est intégralement restauré.
+                let _ = std::fs::remove_file(&key_tmp);
+                let _ = std::fs::remove_file(&pub_tmp);
+                miette!("écriture de l'entrée de rotation impossible : {e}")
+            },
+        )?;
+
+    let label = keys::archive_label(now);
+    let files = keys::commit_rotated_keys(&dir, &key_tmp, &pub_tmp, &label)?;
+
+    let old_hex = hex::encode(old.verifying_key().to_bytes());
+    let new_hex = hex::encode(new.verifying_key().to_bytes());
+    println!(
+        "Rotation de clé journalisée (entrée {}…, nouvelle racine).\n\
+         \x20 ancienne clé : {old_hex}\n\
+         \x20   archivée   : {} (permissions restrictives conservées)\n\
+         \x20 nouvelle clé : {new_hex}\n\
+         \x20   en place   : {}\n\
+         L'entrée de rotation est signée par l'ANCIENNE clé (c'est elle qui \
+         délègue) ; toutes les entrées suivantes seront signées par la nouvelle.\n\
+         L'identité du journal ne change pas : c'est toujours la clé de GENÈSE — \
+         les vérificateurs gardent le même pubkey.bin, le serveur le même journal.\n\
+         SI le serveur utilise une liste d'agents autorisés (--allowed-agents) : \
+         elle liste des clés de genèse, cette rotation ne casse donc PAS \
+         l'autorisation — rien à faire. Vérifiez simplement que la clé de genèse \
+         y figure toujours ; en cas de compromission, voir docs/cles.md \
+         (révocation = `constat-server agents revoke <clé de genèse>`).",
+        &root.to_hex()[..8],
+        files.old_key_archive.display(),
+        files.key_path.display(),
+    );
     Ok(())
 }
 

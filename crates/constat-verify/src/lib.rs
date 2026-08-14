@@ -20,8 +20,15 @@
 //! 2. vérifie le chaînage `prev` de la genèse (entrée 0, `prev` absent)
 //!    jusqu'à la dernière entrée : `prev` de l'entrée *i* doit être
 //!    l'empreinte de l'entrée *i − 1* complète (signature incluse) ;
-//! 3. vérifie la signature Ed25519 de chaque entrée : la signature porte sur
-//!    l'encodage canonique de l'entrée **avec le champ `signature` vidé** ;
+//! 3. vérifie la signature Ed25519 de chaque entrée avec la **clé courante**
+//!    de la chaîne : la clé de genèse (`pubkey.bin`) jusqu'à la première
+//!    entrée de **rotation de clé** valide (blob du collecteur réservé
+//!    `constat.rotation`, signée par la clé courante, `rotation.old_key` égal
+//!    à la clé courante), puis la clé déléguée, et ainsi de suite. Une
+//!    rotation dont `old_key` n'est pas la clé courante est une tentative
+//!    d'usurpation : [`VerifyError::RotationInvalide`], export refusé. La
+//!    signature porte sur l'encodage canonique de l'entrée **avec le champ
+//!    `signature` vidé** ;
 //! 4. vérifie que chaque snapshot référencé par une entrée, et chaque blob
 //!    référencé par un snapshot, est présent dans l'export — **ou que son
 //!    absence est déclarée** par un enregistrement de purge (§16) : un blob du
@@ -30,6 +37,9 @@
 //!    contient l'empreinte absente. Un objet manquant NON déclaré reste une
 //!    erreur d'altération — c'est toute la valeur de la purge journalisée :
 //!    un trou déclaré et un effacement malveillant deviennent distinguables.
+//!    Exception à l'exception : un blob de **rotation** absent n'est jamais
+//!    toléré, même déclaré purgé — une rotation illisible rend la clé
+//!    courante indéterminable.
 //!
 //! Le résultat est structuré : [`VerifiedExport`] avec la racine (empreinte de
 //! la dernière entrée), le nombre d'objets purgés déclarés ([`VerifiedExport::purged_count`])
@@ -68,6 +78,7 @@ use constat_model::{
     hash_canonical, to_canonical_bytes, Blob, BlobHash, CollectorId, Snapshot, Timestamp,
 };
 use constat_store::purge::{parse_purge_blob, PURGE_COLLECTOR};
+use constat_store::rotation::{parse_rotation_blob, ROTATION_COLLECTOR};
 use constat_store::JournalEntry;
 use ed25519_dalek::{Signature, VerifyingKey};
 
@@ -125,6 +136,14 @@ pub struct VerifiedExport {
     /// Les déclarations de purge relevées dans l'export, dans l'ordre de la
     /// chaîne (période, motif, compte, manifeste).
     pub purges: Vec<PurgeSummary>,
+    /// Nombre de **rotations de clé** valides suivies le long de la chaîne
+    /// (FORMAT.md § 4 ter). Zéro sur un export sans rotation — les exports
+    /// antérieurs au format restent valides tels quels.
+    pub rotation_count: usize,
+    /// La **clé finale** : celle qui signe la dernière entrée — la clé de
+    /// genèse (`pubkey.bin`) si aucune rotation, sinon la clé déléguée par
+    /// la dernière rotation valide.
+    pub final_key: [u8; 32],
 }
 
 /// Échec de vérification : désigne précisément l'objet et la vérification en
@@ -181,6 +200,13 @@ pub enum VerifyError {
     /// déclaration ne couvre **aucune** absence, et l'export est refusé
     /// plutôt que vérifié sur une tolérance illisible.
     DeclarationPurgeInvalide { blob: BlobHash, detail: String },
+    /// Une rotation de clé portée par l'entrée `index` est invalide :
+    /// `rotation.old_key` n'est pas la clé courante de la chaîne (tentative
+    /// d'usurpation), déclaration illisible ou incohérente, ou blob de
+    /// rotation absent (une rotation n'est **jamais** purgeable). L'export
+    /// est refusé : sans rotation valide, la clé courante est
+    /// indéterminable.
+    RotationInvalide { index: usize, detail: String },
 }
 
 impl fmt::Display for VerifyError {
@@ -254,6 +280,9 @@ impl fmt::Display for VerifyError {
                 "déclaration de purge invalide (blob {}) : {detail}",
                 blob.to_hex()
             ),
+            VerifyError::RotationInvalide { index, detail } => {
+                write!(f, "entrée {index} : rotation de clé invalide : {detail}")
+            }
         }
     }
 }
@@ -357,6 +386,12 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
     let mut purged_missing: BTreeSet<BlobHash> = BTreeSet::new();
 
     // Étape 3 — chaînage, signatures, références, de la genèse à la racine.
+    // La clé COURANTE (FORMAT.md § 4 ter) démarre à la clé de genèse
+    // (`pubkey.bin`) ; chaque rotation valide la remplace pour les entrées
+    // suivantes.
+    let rotation_collector = CollectorId(ROTATION_COLLECTOR.to_string());
+    let mut current = key;
+    let mut rotation_count = 0usize;
     let mut prev: Option<BlobHash> = None;
     for (index, entry) in export.entries.iter().enumerate() {
         // 3a. Chaînage `prev`.
@@ -372,7 +407,10 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
         }
 
         // 3b. Signature Ed25519 sur l'encodage canonique de l'entrée avec le
-        // champ `signature` vidé (contrat partagé avec constat-store).
+        // champ `signature` vidé (contrat partagé avec constat-store),
+        // vérifiée avec la clé COURANTE : l'entrée de rotation elle-même est
+        // signée par l'ancienne clé (c'est elle qui délègue), les entrées
+        // suivantes par la nouvelle.
         let sig_bytes: [u8; 64] =
             entry
                 .signature
@@ -390,14 +428,17 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
             signature: Vec::new(),
         };
         let message = to_canonical_bytes(&non_signee).map_err(encodage)?;
-        key.verify_strict(&message, &signature)
+        current
+            .verify_strict(&message, &signature)
             .map_err(|_| VerifyError::SignatureInvalide { index })?;
 
         // 3c. Chaque snapshot référencé est présent, et chaque blob qu'il
         // référence l'est aussi (leur intégrité a été vérifiée aux étapes
         // 1-2) — à l'unique exception d'une absence DÉCLARÉE par une purge
         // journalisée postérieure (étape 2 bis). Tout autre manque est une
-        // altération.
+        // altération. Exception à l'exception : un blob de ROTATION absent
+        // n'est jamais toléré, même déclaré — une rotation n'est jamais
+        // purgeable (§ 4 ter), sans elle la clé courante est indéterminable.
         for hash in &entry.snapshots {
             let snapshot = match export.snapshots.get(hash) {
                 Some(snapshot) => snapshot,
@@ -409,6 +450,16 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
             };
             for (collecteur, blob_hash) in &snapshot.blobs {
                 if !export.blobs.contains_key(blob_hash) {
+                    if *collecteur == rotation_collector {
+                        return Err(VerifyError::RotationInvalide {
+                            index,
+                            detail: format!(
+                                "blob de rotation {} absent de l'export — une rotation \
+                                 n'est jamais purgeable",
+                                blob_hash.to_hex()
+                            ),
+                        });
+                    }
                     if declared_after(blob_hash, index) {
                         purged_missing.insert(*blob_hash);
                         continue;
@@ -418,6 +469,44 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
                         collecteur: collecteur.clone(),
                         hash: *blob_hash,
                     });
+                }
+            }
+
+            // 3c bis. Rotation portée par ce snapshot (§ 4 ter) : validée
+            // contre la clé courante, puis la clé bascule pour les entrées
+            // suivantes. Une rotation invalide refuse l'export entier.
+            if let Some(blob_hash) = snapshot.blobs.get(&rotation_collector) {
+                // Présence garantie par la boucle ci-dessus.
+                if let Some(blob) = export.blobs.get(blob_hash) {
+                    let declaration =
+                        parse_rotation_blob(blob).map_err(|e| VerifyError::RotationInvalide {
+                            index,
+                            detail: format!(
+                                "déclaration illisible (blob {}) : {e}",
+                                blob_hash.to_hex()
+                            ),
+                        })?;
+                    if declaration.old_key != current.to_bytes() {
+                        return Err(VerifyError::RotationInvalide {
+                            index,
+                            detail: format!(
+                                "old_key = {} mais la clé courante de la chaîne est {} — \
+                                 tentative d'usurpation",
+                                hex32(&declaration.old_key),
+                                hex32(&current.to_bytes())
+                            ),
+                        });
+                    }
+                    current = VerifyingKey::from_bytes(&declaration.new_key).map_err(|_| {
+                        VerifyError::RotationInvalide {
+                            index,
+                            detail: format!(
+                                "la nouvelle clé {} n'est pas une clé Ed25519 valide",
+                                hex32(&declaration.new_key)
+                            ),
+                        }
+                    })?;
+                    rotation_count += 1;
                 }
             }
         }
@@ -435,6 +524,8 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
             blob_count: export.blobs.len(),
             purged_count: purged_missing.len(),
             purges,
+            rotation_count,
+            final_key: current.to_bytes(),
         }),
         // Impossible : entries est non vide, la boucle a affecté `prev`.
         None => Err(VerifyError::ExportVide),
@@ -445,4 +536,8 @@ fn encodage(e: constat_model::ModelError) -> VerifyError {
     VerifyError::Encodage {
         detail: e.to_string(),
     }
+}
+
+fn hex32(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

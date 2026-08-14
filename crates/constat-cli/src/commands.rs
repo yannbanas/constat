@@ -499,9 +499,15 @@ pub struct ExportArgs<'a> {
 /// [`constat_store::export_store`].
 ///
 /// La clé publique est résolue comme documenté dans [`crate::keyres`]
-/// (`--pubkey`, sinon le répertoire de clés de l'agent). Avant d'écrire,
-/// la chaîne est vérifiée avec cette clé : exporter un journal que la clé
-/// fournie ne vérifie pas produirait un export qui échoue chez l'auditeur.
+/// (`--pubkey`, sinon le répertoire de clés de l'agent) — c'est la clé
+/// **courante**. L'export, lui, écrit dans `pubkey.bin` la clé de **GENÈSE**
+/// du journal (l'identité, stable à travers les rotations de clé,
+/// [`constat_store::genesis_key`]) : c'est elle que le vérificateur attend,
+/// et il suit ensuite les rotations journalisées le long de la chaîne
+/// (FORMAT.md § 4 ter). Avant d'écrire, la chaîne est vérifiée en suivant la
+/// clé courante ([`constat_store::verify_chain_rotated`]) : exporter un
+/// journal qui ne se vérifie pas produirait un export qui échoue chez
+/// l'auditeur.
 pub fn cmd_export(store: &dyn Store, args: &ExportArgs<'_>) -> miette::Result<String> {
     let key = keyres::resolve_public_key(args.pubkey, args.keys)?;
     let entries = store.entries().into_diagnostic()?;
@@ -510,17 +516,40 @@ pub fn cmd_export(store: &dyn Store, args: &ExportArgs<'_>) -> miette::Result<St
             "le journal est vide : aucun export de preuve à produire"
         ));
     };
-    constat_store::verify_chain(&entries, &key).map_err(|e| {
+    let genesis_bytes = constat_store::genesis_key(store, &entries, &key.to_bytes())
+        .map_err(|e| miette!("lecture des rotations du journal impossible : {e}"))?;
+    let genesis = constat_store::VerifyingKey::from_bytes(&genesis_bytes)
+        .map_err(|e| miette!("clé de genèse du journal invalide : {e}"))?;
+    let trace = constat_store::verify_chain_rotated(store, &entries, &genesis).map_err(|e| {
         miette!(
-            help = "vérifiez que la clé fournie (--pubkey/--keys) est bien celle qui \
-                    signe ce journal",
-            "le journal ne se vérifie pas avec cette clé publique : {e}"
+            help = "vérifiez que la clé fournie (--pubkey/--keys) est bien la clé \
+                    courante de ce journal (après rotation, agent.pub est la nouvelle \
+                    clé ; la genèse est retrouvée par le journal lui-même)",
+            "le journal ne se vérifie pas : {e}"
         )
     })?;
-    constat_store::export_store(store, args.out, &key)
+    if trace.final_key != key.to_bytes() {
+        return Err(miette!(
+            help = "après `constat-agent rotate-key`, la clé courante est le nouvel \
+                    agent.pub ; fournissez-la (--pubkey/--keys) — la clé de genèse, \
+                    elle, est retrouvée automatiquement dans le journal",
+            "la clé fournie n'est pas la clé courante de ce journal"
+        ));
+    }
+    constat_store::export_store(store, args.out, &genesis)
         .map_err(|e| miette!("export vers {} impossible : {e}", args.out.display()))?;
+    let rotation_note = if trace.rotations == 0 {
+        String::new()
+    } else {
+        format!(
+            "{} rotation(s) de clé suivie(s) — pubkey.bin est la clé de GENÈSE \
+             (l'identité du journal), le vérificateur suit les rotations.\n",
+            trace.rotations
+        )
+    };
     Ok(format!(
         "Export vérifiable écrit : {} ({} entrée(s), clôture complète de la preuve).\n\
+         {rotation_note}\
          Racine du journal : {}\n\
          Vérification par un tiers, sans Constat : constat-verify {}",
         args.out.display(),
