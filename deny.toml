@@ -48,6 +48,9 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
+    # Licence permissive de données (pas de code) : utilisée par webpki-roots
+    # pour le magasin de certificats racines Mozilla (client HTTPS RFC 3161).
+    "CDLA-Permissive-2.0",
 ]
 # Seuil de confiance sur la détection de licence par clearlydefined.
 confidence-threshold = 0.93
@@ -64,6 +67,9 @@ ignore = true
 # (l'écosystème rend le zéro-doublon coûteux), à durcir ensuite.
 multiple-versions = "warn"
 wildcards = "deny"          # aucune dépendance en version "*"
+# Les dépendances internes du workspace sont déclarées par chemin, sans
+# version (crates non publiés) — cargo-deny les compterait comme "*" sinon.
+allow-wildcard-paths = true
 highlight = "all"
 
 # Crates explicitement interdits, quelle que soit la version.
