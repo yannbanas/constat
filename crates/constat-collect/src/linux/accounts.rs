@@ -257,6 +257,13 @@ pub fn redact_accounts_capture(raw_text: &str) -> String {
 /// Expurge chaque ligne d'un contenu shadow : le champ 2 (hachage) est
 /// toujours remplacé, quelle que soit sa forme (voir
 /// [`redact::redact_shadow_hash_field`]).
+///
+/// Le découpage est conscient des marqueurs (`[EXPURGÉ:…]`), pas un simple
+/// `split(':')` : l'expurgation doit être **idempotente**. Une capture déjà
+/// expurgée (la seule forme qui quitte la machine, et celle du corpus)
+/// contient des marqueurs dont le `:` interne n'est pas un séparateur de
+/// champ — le traiter comme tel décalait `last_change_days` et `max_days`
+/// (bogue attrapé par `corpus/accounts/comptes-verrouilles`).
 fn redact_shadow_content(shadow: &str) -> String {
     shadow
         .split('\n')
@@ -265,7 +272,10 @@ fn redact_shadow_content(shadow: &str) -> String {
             if line.is_empty() || line.starts_with('#') {
                 return line.to_string();
             }
-            let mut fields: Vec<String> = line.split(':').map(str::to_string).collect();
+            let mut fields: Vec<String> = redact::split_colon_fields(line)
+                .into_iter()
+                .map(str::to_string)
+                .collect();
             if fields.len() >= 2 {
                 fields[1] = redact::redact_shadow_hash_field(&fields[1]);
             } else {
@@ -443,6 +453,28 @@ mod tests {
         assert_eq!(
             value(&facts, "user:root", "user.password.algorithm"),
             &Value::Absent
+        );
+    }
+
+    /// L'expurgation shadow est idempotente : ré-expurger une capture déjà
+    /// expurgée (la forme du corpus) ne décale aucun champ — l'âge du mot de
+    /// passe survit intact au second passage.
+    #[test]
+    fn expurgation_shadow_idempotente() {
+        let brut = "alice:$6$sel$empreintesecrete123456789:19700:0:365:14:::\n\
+                    bob:!$y$j9T$sel$empreinte:19000:0:60:7:::\n\
+                    root:*:18000::::::\n";
+        let une_fois = redact_shadow_content(brut);
+        let deux_fois = redact_shadow_content(&une_fois);
+        assert_eq!(une_fois, deux_fois);
+        let facts = extract_accounts_facts(PASSWD, GROUP, Some(&deux_fois));
+        assert_eq!(
+            value(&facts, "user:alice", "user.password.last_change_days"),
+            &Value::Int(19700)
+        );
+        assert_eq!(
+            value(&facts, "user:alice", "user.password.max_days"),
+            &Value::Int(365)
         );
     }
 

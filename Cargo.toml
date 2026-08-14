@@ -17,6 +17,9 @@ members = [
 
 [workspace.package]
 version = "0.3.0"
+# Crates non publiés sur crates.io (distribution par binaires et image).
+# Cohérent avec licenses.private.ignore et allow-wildcard-paths de deny.toml.
+publish = false
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/yannbanas/constat"

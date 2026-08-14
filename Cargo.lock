@@ -410,6 +410,7 @@ dependencies = [
  "insta",
  "proptest",
  "serde",
+ "serde_yaml",
  "thiserror",
  "windows-sys 0.59.0",
 ]

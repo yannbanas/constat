@@ -28,6 +28,26 @@ const ENTITY: &str = "service:sshd";
 /// Directives suivies. Pour chacune, un fait est TOUJOURS produit :
 /// la valeur observée si elle est présente, [`Value::Absent`] sinon.
 /// (`Port` est traité à part car cumulatif.)
+///
+/// **Critère d'inclusion** : une directive entre dans cette liste si un
+/// référentiel de durcissement (CIS, ANSSI) la contrôle — c'est le corpus
+/// (`corpus/sshd/`) qui a fixé la couverture. Par famille :
+///
+/// - accès : `PermitRootLogin`, `PasswordAuthentication`,
+///   `PubkeyAuthentication`, `PermitEmptyPasswords`,
+///   `ChallengeResponseAuthentication`, `KbdInteractiveAuthentication`,
+///   `UsePAM`, `AllowGroups`, `Protocol` ;
+/// - robustesse d'authentification : `MaxAuthTries`, `LoginGraceTime`,
+///   `MaxSessions` ;
+/// - sessions inactives : `ClientAliveInterval`, `ClientAliveCountMax` ;
+/// - transferts : `X11Forwarding`, `AllowTcpForwarding` ;
+/// - intégrité et traçabilité : `StrictModes`, `LogLevel`.
+///
+/// La REPRÉSENTATION reste celle du fichier : les valeurs « booléennes »
+/// d'OpenSSH sont des [`Value::Text`] (`"yes"`, `"no"`) car certaines
+/// directives admettent d'autres mots (`prohibit-password`,
+/// `forced-commands-only`…) — normaliser en [`Value::Bool`] perdrait cette
+/// nuance et produirait des verdicts faux.
 pub const TRACKED_DIRECTIVES: &[&str] = &[
     "PermitRootLogin",
     "PasswordAuthentication",
@@ -41,10 +61,27 @@ pub const TRACKED_DIRECTIVES: &[&str] = &[
     "LoginGraceTime",
     "UsePAM",
     "Protocol",
+    "MaxSessions",
+    "StrictModes",
+    "LogLevel",
+    "ClientAliveInterval",
+    "ClientAliveCountMax",
+    "AllowGroups",
 ];
 
 /// Directives à valeur numérique (stockées en [`Value::Int`] si possible).
-const NUMERIC_DIRECTIVES: &[&str] = &["MaxAuthTries", "LoginGraceTime"];
+const NUMERIC_DIRECTIVES: &[&str] = &[
+    "MaxAuthTries",
+    "LoginGraceTime",
+    "MaxSessions",
+    "ClientAliveInterval",
+    "ClientAliveCountMax",
+];
+
+/// Directives dont l'argument est une liste de motifs séparés par des
+/// espaces : stockées en [`Value::List`] de [`Value::Text`], même pour un
+/// seul élément (une liste reste une liste — prévisible pour les assertions).
+const LIST_DIRECTIVES: &[&str] = &["AllowGroups"];
 
 /// Sépare une ligne de sshd_config en (mot-clef, argument).
 /// OpenSSH accepte `Cle valeur`, `Cle=valeur` et `Cle = valeur`.
@@ -115,6 +152,12 @@ pub fn extract_sshd_facts(text: &str) -> Vec<Fact> {
                             Ok(n) => Value::Int(n),
                             Err(_) => Value::Text(raw.clone()),
                         }
+                    } else if LIST_DIRECTIVES.contains(canonical) {
+                        Value::List(
+                            raw.split_whitespace()
+                                .map(|t| Value::Text(t.to_string()))
+                                .collect(),
+                        )
                     } else {
                         Value::Text(raw.clone())
                     }
@@ -247,6 +290,58 @@ mod tests {
     fn numerique_parse_en_int() {
         let facts = extract_sshd_facts("MaxAuthTries 3\n");
         assert_eq!(fact(&facts, "sshd.MaxAuthTries"), &Value::Int(3));
+    }
+
+    /// Chaque directive suivie — les extensions venues du corpus comprises
+    /// (`MaxSessions`, `StrictModes`, `LogLevel`, `ClientAliveInterval`,
+    /// `ClientAliveCountMax`, `AllowGroups`) — produit `Absent` quand elle
+    /// ne figure pas dans le fichier : le cas Absent est couvert pour toutes.
+    #[test]
+    fn toute_directive_suivie_absente_donne_absent() {
+        let facts = extract_sshd_facts("");
+        assert_eq!(facts.len(), TRACKED_DIRECTIVES.len() + 1); // + Port
+        for f in &facts {
+            assert_eq!(f.value, Value::Absent, "{} devrait être Absent", f.attribute.0);
+        }
+    }
+
+    #[test]
+    fn directives_du_corpus_extraites() {
+        let facts = extract_sshd_facts(
+            "MaxSessions 4\nStrictModes yes\nLogLevel VERBOSE\n\
+             ClientAliveInterval 300\nClientAliveCountMax 2\n",
+        );
+        assert_eq!(fact(&facts, "sshd.MaxSessions"), &Value::Int(4));
+        // « yes » reste du texte : la représentation suit le fichier,
+        // jamais une normalisation en Bool (prohibit-password le prouve)
+        assert_eq!(
+            fact(&facts, "sshd.StrictModes"),
+            &Value::Text("yes".to_string())
+        );
+        assert_eq!(
+            fact(&facts, "sshd.LogLevel"),
+            &Value::Text("VERBOSE".to_string())
+        );
+        assert_eq!(fact(&facts, "sshd.ClientAliveInterval"), &Value::Int(300));
+        assert_eq!(fact(&facts, "sshd.ClientAliveCountMax"), &Value::Int(2));
+    }
+
+    #[test]
+    fn allow_groups_toujours_en_liste() {
+        let facts = extract_sshd_facts("AllowGroups ssh-users admins\n");
+        assert_eq!(
+            fact(&facts, "sshd.AllowGroups"),
+            &Value::List(vec![
+                Value::Text("ssh-users".to_string()),
+                Value::Text("admins".to_string())
+            ])
+        );
+        // un seul élément : liste quand même (représentation prévisible)
+        let facts = extract_sshd_facts("AllowGroups ssh-users\n");
+        assert_eq!(
+            fact(&facts, "sshd.AllowGroups"),
+            &Value::List(vec![Value::Text("ssh-users".to_string())])
+        );
     }
 
     #[test]
