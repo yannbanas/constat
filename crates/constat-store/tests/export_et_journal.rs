@@ -90,6 +90,44 @@ fn schema_de_signature_contrat_inter_agents() {
         .expect("signature conforme au schéma");
 }
 
+/// Ed25519 est déterministe (RFC 8032) : pour une clé et un message donnés,
+/// la signature est unique au bit près. Ce test rejoue le vecteur TEST 3 du
+/// §7.1 de la RFC — il fige les octets produits à travers les mises à jour
+/// d'ed25519-dalek : une entrée signée par une version antérieure doit se
+/// revérifier à l'identique par toutes les suivantes.
+#[test]
+fn ed25519_reproduit_le_vecteur_de_test_rfc_8032() {
+    use ed25519_dalek::Signer as _;
+
+    let secret: [u8; 32] =
+        hex::decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7")
+            .unwrap()
+            .try_into()
+            .unwrap();
+    let message = hex::decode("af82").unwrap();
+    let expected_signature = hex::decode(
+        "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac\
+         18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+    )
+    .unwrap();
+
+    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    assert_eq!(
+        hex::encode(key.verifying_key().to_bytes()),
+        "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+        "clé publique dérivée conforme au vecteur"
+    );
+    let signature = key.sign(&message);
+    assert_eq!(
+        signature.to_bytes().to_vec(),
+        expected_signature,
+        "octets de signature conformes au vecteur RFC 8032"
+    );
+    key.verifying_key()
+        .verify_strict(&message, &signature)
+        .expect("le vecteur se revérifie");
+}
+
 #[test]
 fn append_refuse_un_prev_incoherent() {
     let mut store = MemoryStore::new();

@@ -32,7 +32,7 @@ use constat_server::serve::{self, SharedStore};
 use constat_store::{append_signed, verify_chain, MemoryStore, Signer, Store};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose,
+    Issuer, KeyPair, KeyUsagePurpose,
 };
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ struct TestPki {
     rogue_key: PathBuf,
 }
 
-fn make_ca(common_name: &str) -> (Certificate, KeyPair) {
+fn make_ca(common_name: &str) -> (Certificate, Issuer<'static, KeyPair>) {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params
@@ -63,15 +63,14 @@ fn make_ca(common_name: &str) -> (Certificate, KeyPair) {
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     let cert = params.self_signed(&key).unwrap();
-    (cert, key)
+    (cert, Issuer::new(params, key))
 }
 
 fn make_leaf(
     common_name: &str,
     sans: Vec<String>,
     eku: ExtendedKeyUsagePurpose,
-    issuer: &Certificate,
-    issuer_key: &KeyPair,
+    issuer: &Issuer<'_, KeyPair>,
 ) -> (Certificate, KeyPair) {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(sans).unwrap();
@@ -79,7 +78,7 @@ fn make_leaf(
         .distinguished_name
         .push(DnType::CommonName, common_name);
     params.extended_key_usages.push(eku);
-    let cert = params.signed_by(&key, issuer, issuer_key).unwrap();
+    let cert = params.signed_by(&key, issuer).unwrap();
     (cert, key)
 }
 
@@ -89,30 +88,29 @@ impl TestPki {
             std::env::temp_dir().join(format!("constat-e2e-{}-{test_name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let (server_ca_cert, server_ca_key) = make_ca("CA serveur Constat (test)");
-        let (agents_ca_cert, agents_ca_key) = make_ca("CA agents Constat (test)");
-        let (rogue_ca_cert, rogue_ca_key) = make_ca("CA intruse (test)");
+        let (server_ca_cert, server_ca_issuer) = make_ca("CA serveur Constat (test)");
+        let (agents_ca_cert, agents_ca_issuer) = make_ca("CA agents Constat (test)");
+        // Le certificat de la CA intruse n'est distribué à personne : seule
+        // sa capacité à signer le certificat feuille « intrus » compte.
+        let (_rogue_ca_cert, rogue_ca_issuer) = make_ca("CA intruse (test)");
 
         let (server_cert, server_key) = make_leaf(
             "constat-server",
             vec!["localhost".into(), "127.0.0.1".into()],
             ExtendedKeyUsagePurpose::ServerAuth,
-            &server_ca_cert,
-            &server_ca_key,
+            &server_ca_issuer,
         );
         let (agent_cert, agent_key) = make_leaf(
             "agent-01",
             Vec::new(),
             ExtendedKeyUsagePurpose::ClientAuth,
-            &agents_ca_cert,
-            &agents_ca_key,
+            &agents_ca_issuer,
         );
         let (rogue_cert, rogue_key) = make_leaf(
             "intrus",
             Vec::new(),
             ExtendedKeyUsagePurpose::ClientAuth,
-            &rogue_ca_cert,
-            &rogue_ca_key,
+            &rogue_ca_issuer,
         );
 
         let write = |name: &str, contents: String| -> PathBuf {

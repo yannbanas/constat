@@ -19,6 +19,9 @@ rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# Vecteur de test RFC 8032 : fige les octets de signature à travers les
+# mises à jour d'ed25519-dalek (trait Signer nécessaire dans les tests).
+ed25519-dalek = { workspace = true }
 # Vérification indépendante des empreintes dans les tests d'export.
 blake3 = { workspace = true }
 hex = { workspace = true }

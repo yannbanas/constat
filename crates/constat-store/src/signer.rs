@@ -12,7 +12,8 @@
 
 use constat_model::{BlobHash, Timestamp};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 
 use crate::journal::signable_bytes;
 use crate::{JournalEntry, StoreError};
@@ -53,9 +54,13 @@ impl std::fmt::Debug for Signer {
 
 impl Signer {
     /// Génère une nouvelle clé aléatoire (CSPRNG du système).
+    ///
+    /// `SysRng` (l'ex-`OsRng`) est faillible depuis rand 0.10 ; `UnwrapErr`
+    /// le rend infaillible — un échec du CSPRNG du système est une panique,
+    /// jamais une clé dégradée.
     pub fn generate() -> Self {
         Self {
-            key: SigningKey::generate(&mut OsRng),
+            key: SigningKey::generate(&mut UnwrapErr(SysRng)),
         }
     }
 

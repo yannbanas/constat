@@ -439,7 +439,9 @@ fn anchor_send_https_refuse_un_certificat_hors_racines_publiques() {
     let certified =
         rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("certificat");
     let cert_der: CertificateDer<'static> = certified.cert.der().clone();
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        certified.signing_key.serialize_der(),
+    ));
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
     ))

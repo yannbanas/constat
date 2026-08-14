@@ -47,15 +47,15 @@ calque-vendors = { git = "https://github.com/yannbanas/calque", tag = "v0.3.0" }
 serde = { version = "1", features = ["derive"] }
 ciborium = "0.2"
 blake3 = "1"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-rand = "0.8"
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+rand = "0.10"
 zstd = "0.13"
 redb = "2"
 # rustls synchrone, fournisseur ring fixé (pas d'aws-lc-rs : compilation
 # Windows sans cmake/NASM) — configuration partagée par agent, serveur et CLI.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
 rustls-pki-types = { version = "1.10", features = ["std"] }
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"] }
 clap = { version = "4", features = ["derive"] }
 miette = "7"
 thiserror = "2"

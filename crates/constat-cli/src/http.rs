@@ -373,8 +373,9 @@ mod tests {
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
             .expect("certificat de test");
         let cert_der: CertificateDer<'static> = certified.cert.der().clone();
-        let key =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+            certified.signing_key.serialize_der(),
+        ));
 
         let mut roots = rustls::RootCertStore::empty();
         roots.add(cert_der.clone()).expect("racine de test");
