@@ -1,5 +1,8 @@
 # Faits attendus pour corpus/accounts/comptes-verrouilles/capture.txt
 #
+# Format : voir corpus/README.md. La liste est EXHAUSTIVE (comparaison dans
+# les deux sens par tests/corpus.rs) : 9 faits par compte.
+#
 # Le cas d'audit réel : des comptes VERROUILLÉS mais pas supprimés.
 # « verrouillé » (`!` devant le hachage) et « sans mot de passe » (`*`) sont
 # deux états différents, et aucun des deux ne retire le compte des groupes :
@@ -9,7 +12,9 @@
 # La section /etc/shadow de la capture est sous sa forme EXPURGÉE
 # (`$id$[EXPURGÉ:hachage]`) : c'est la seule forme autorisée à quitter la
 # machine (§7.2), donc la seule que l'extracteur voit — et le corpus est
-# public, aucun hachage même factice n'y a sa place (règle 1).
+# public, aucun hachage même factice n'y a sa place (règle 1). Le harnais
+# repasse cette capture par `redact` : l'expurgation doit être idempotente
+# (le `:` interne du marqueur n'est pas un séparateur de champ).
 
 collector: accounts
 case: comptes-verrouilles
@@ -67,11 +72,20 @@ facts:
   - entity: "user:daemon"
     attribute: "user.password.algorithm"
     value: { absent: true }
+  - entity: "user:daemon"
+    attribute: "user.password.last_change_days"
+    value: { int: 18474 }
+  - entity: "user:daemon"
+    attribute: "user.password.max_days"
+    value: { int: 99999 }
 
   # --- mfournier : compte humain actif, yescrypt, expiration à 365 jours
   - entity: "user:mfournier"
     attribute: "user.uid"
     value: { int: 1000 }
+  - entity: "user:mfournier"
+    attribute: "user.shell"
+    value: { text: "/bin/bash" }
   - entity: "user:mfournier"
     attribute: "user.groups"
     value:
@@ -105,6 +119,12 @@ facts:
     attribute: "user.uid"
     value: { int: 998 }
   - entity: "user:svc-sauvegarde"
+    attribute: "user.shell"
+    value: { text: "/usr/sbin/nologin" }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.groups"
+    value: { list: [{ text: "svc-sauvegarde" }] }
+  - entity: "user:svc-sauvegarde"
     attribute: "user.privileged"
     value: { bool: false }
   - entity: "user:svc-sauvegarde"
@@ -116,12 +136,21 @@ facts:
   - entity: "user:svc-sauvegarde"
     attribute: "user.password.algorithm"
     value: { text: "sha512" }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.password.last_change_days"
+    value: { int: 19700 }
+  - entity: "user:svc-sauvegarde"
+    attribute: "user.password.max_days"
+    value: { int: 99999 }
 
   # --- ancien-admin : LE fait qui compte — verrouillé, mais toujours membre
   # de sudo. Le verrouillage ne retire pas les privilèges.
   - entity: "user:ancien-admin"
     attribute: "user.uid"
     value: { int: 1001 }
+  - entity: "user:ancien-admin"
+    attribute: "user.shell"
+    value: { text: "/bin/bash" }
   - entity: "user:ancien-admin"
     attribute: "user.groups"
     value:
@@ -140,3 +169,9 @@ facts:
   - entity: "user:ancien-admin"
     attribute: "user.password.algorithm"
     value: { text: "sha512" }
+  - entity: "user:ancien-admin"
+    attribute: "user.password.last_change_days"
+    value: { int: 19500 }
+  - entity: "user:ancien-admin"
+    attribute: "user.password.max_days"
+    value: { int: 99999 }

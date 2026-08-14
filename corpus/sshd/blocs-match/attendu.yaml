@@ -1,5 +1,8 @@
 # Faits attendus pour corpus/sshd/blocs-match/capture.txt
 #
+# Format : voir corpus/README.md. La liste est EXHAUSTIVE (comparaison dans
+# les deux sens par tests/corpus.rs).
+#
 # Deux pièges classiques d'un sshd_config réel :
 #
 # 1. Directives DUPLIQUÉES : la sémantique OpenSSH est « première occurrence
@@ -27,11 +30,11 @@ facts:
 
   - entity: "service:sshd"
     attribute: "sshd.PasswordAuthentication"
-    value: { bool: false }
+    value: { text: "no" }
 
   - entity: "service:sshd"
     attribute: "sshd.PubkeyAuthentication"
-    value: { bool: true }
+    value: { text: "yes" }
 
   # première occurrence gagnante : 3, pas le 6 du bloc Match
   - entity: "service:sshd"
@@ -48,7 +51,51 @@ facts:
     attribute: "sshd.AllowTcpForwarding"
     value: { absent: true }
 
-  # jamais mentionnée dans le fichier : le défaut du système s'applique
+  # jamais mentionnées dans le fichier : le défaut du système s'applique
   - entity: "service:sshd"
     attribute: "sshd.PermitEmptyPasswords"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.ChallengeResponseAuthentication"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.KbdInteractiveAuthentication"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.LoginGraceTime"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.UsePAM"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.Protocol"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.MaxSessions"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.StrictModes"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.LogLevel"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.ClientAliveInterval"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.ClientAliveCountMax"
+    value: { absent: true }
+
+  - entity: "service:sshd"
+    attribute: "sshd.AllowGroups"
     value: { absent: true }

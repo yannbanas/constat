@@ -301,7 +301,12 @@ mod tests {
         let facts = extract_sshd_facts("");
         assert_eq!(facts.len(), TRACKED_DIRECTIVES.len() + 1); // + Port
         for f in &facts {
-            assert_eq!(f.value, Value::Absent, "{} devrait être Absent", f.attribute.0);
+            assert_eq!(
+                f.value,
+                Value::Absent,
+                "{} devrait être Absent",
+                f.attribute.0
+            );
         }
     }
 

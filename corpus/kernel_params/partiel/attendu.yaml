@@ -1,5 +1,8 @@
 # Faits attendus pour corpus/kernel_params/partiel/capture.txt
 #
+# Format : voir corpus/README.md. La liste est EXHAUSTIVE (comparaison dans
+# les deux sens par tests/corpus.rs) : les 25 clés de la liste blanche.
+#
 # Un dump sysctl PARTIEL est l'état normal, pas l'exception : IPv6 désactivé
 # au démarrage fait disparaître toutes les clés net.ipv6.*, un module non
 # chargé (Yama) fait disparaître la sienne. Pour chaque clé de la liste

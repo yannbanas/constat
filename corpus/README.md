@@ -15,18 +15,57 @@ Chaque cas du corpus associe :
 - **les faits attendus** — les triplets que l'extracteur doit produire à
   partir de cette capture, y compris les cas `Absent`.
 
-Un test d'intégration parcourt le corpus, exécute l'extracteur sur chaque
-capture et compare fait à fait avec l'attendu. Toute divergence casse la CI.
+**Chaque cas est exécuté par `crates/constat-collect/tests/corpus.rs`** : le
+harnais découvre tous les répertoires de cas, choisit l'extracteur d'après le
+premier segment du chemin (`sshd/` → extracteur sshd, `accounts/`,
+`packages/`, `kernel_params/`…), passe `capture.txt` par le pipeline de
+production `redact` → `extract` du collecteur, et compare fait à fait avec
+`attendu.yaml` — **dans les deux sens** : un fait attendu manquant, un fait
+produit non attendu ou une valeur différente cassent le test avec un diff
+lisible. Un répertoire de cas sans `attendu.yaml` est un échec : un cas sans
+verdict attendu n'est pas un cas. Toute divergence casse la CI.
+
+Corollaire : la liste `facts:` d'un `attendu.yaml` est **exhaustive** — elle
+décrit tout ce que l'extracteur produit sur cette capture, cas `Absent`
+compris.
 
 ## Organisation
 
 ```
 corpus/
-└── <collecteur>/            # sshd, sudoers, users, ...
+└── <collecteur>/            # sshd, accounts, packages, kernel_params, ...
     └── <cas>/               # basique, defaut-implicite, hostile, ...
         ├── capture.txt      # l'artefact brut anonymisé
         └── attendu.yaml     # les faits attendus
 ```
+
+## Le format d'`attendu.yaml`
+
+```yaml
+collector: sshd        # premier segment du chemin (choisit l'extracteur)
+case: basique          # nom du répertoire de cas
+
+facts:                 # liste EXHAUSTIVE de triplets entité-attribut-valeur
+  - entity: "service:sshd"
+    attribute: "sshd.Port"
+    value: { int: 22 }
+```
+
+La valeur est un objet YAML à **une clef**, qui nomme le type du modèle
+(`constat_model::Value`) :
+
+| Écriture | Valeur du modèle |
+|---|---|
+| `value: { bool: true }` | `Value::Bool(true)` |
+| `value: { int: 22 }` | `Value::Int(22)` |
+| `value: { text: "no" }` | `Value::Text("no")` |
+| `value: { list: [{ int: 22 }, { int: 2222 }] }` | `Value::List([...])` (récursif) |
+| `value: { absent: true }` | `Value::Absent` |
+
+L'absence est une **balise dédiée**, jamais une chaîne : `{ absent: true }`
+et `{ text: "absent" }` sont deux faits différents, et le format doit rendre
+la confusion impossible (c'est tout l'objet de l'ADR 001). `absent: false`
+est rejeté par le harnais — pour une valeur présente, on écrit son type.
 
 ## Règles d'ajout d'un cas
 

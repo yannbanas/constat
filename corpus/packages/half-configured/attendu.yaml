@@ -1,5 +1,8 @@
 # Faits attendus pour corpus/packages/half-configured/capture.txt
 #
+# Format : voir corpus/README.md. La liste est EXHAUSTIVE (comparaison dans
+# les deux sens par tests/corpus.rs).
+#
 # L'état dpkg est le TROISIÈME mot du champ `Status: <want> <flag> <status>` :
 # « install ok half-configured » signifie que le postinst a échoué — le paquet
 # n'est PAS installé au sens de la conformité, même si sa version figure dans

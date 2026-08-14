@@ -1,8 +1,14 @@
 # Faits attendus pour corpus/sshd/basique/capture.txt
 #
-# Chaque fait : entité, attribut, valeur attendue.
-# `value.absent: true` signifie Value::Absent — la directive ne figure pas
-# dans le fichier (le défaut du système s'applique) ; ce n'est PAS "no".
+# Format : voir corpus/README.md. La liste est EXHAUSTIVE : le harnais
+# (crates/constat-collect/tests/corpus.rs) compare dans les deux sens —
+# un fait produit non listé ici est un échec, comme un fait listé manquant.
+#
+# Représentation : les valeurs « booléennes » d'OpenSSH restent du TEXTE
+# ("yes"/"no") — `PermitRootLogin` admet aussi `prohibit-password` ou
+# `forced-commands-only`, normaliser en booléen perdrait cette nuance.
+# `value: { absent: true }` signifie Value::Absent — la directive ne figure
+# pas dans le fichier (le défaut du système s'applique) ; ce n'est PAS "no".
 # Une directive présente uniquement en commentaire (#X11Forwarding no) est
 # absente : un commentaire n'est pas une directive.
 
@@ -20,19 +26,24 @@ facts:
 
   - entity: "service:sshd"
     attribute: "sshd.PasswordAuthentication"
-    value: { bool: false }
+    value: { text: "no" }
 
   - entity: "service:sshd"
     attribute: "sshd.PermitEmptyPasswords"
-    value: { bool: false }
+    value: { text: "no" }
 
   - entity: "service:sshd"
     attribute: "sshd.PubkeyAuthentication"
-    value: { bool: true }
+    value: { text: "yes" }
 
   - entity: "service:sshd"
     attribute: "sshd.KbdInteractiveAuthentication"
-    value: { bool: false }
+    value: { text: "no" }
+
+  # l'ancien nom de KbdInteractiveAuthentication : jamais écrit ici → Absent
+  - entity: "service:sshd"
+    attribute: "sshd.ChallengeResponseAuthentication"
+    value: { absent: true }
 
   - entity: "service:sshd"
     attribute: "sshd.MaxAuthTries"
@@ -48,15 +59,15 @@ facts:
 
   - entity: "service:sshd"
     attribute: "sshd.StrictModes"
-    value: { bool: true }
+    value: { text: "yes" }
 
   - entity: "service:sshd"
     attribute: "sshd.UsePAM"
-    value: { bool: true }
+    value: { text: "yes" }
 
   - entity: "service:sshd"
     attribute: "sshd.AllowTcpForwarding"
-    value: { bool: false }
+    value: { text: "no" }
 
   - entity: "service:sshd"
     attribute: "sshd.LogLevel"
@@ -73,6 +84,11 @@ facts:
   - entity: "service:sshd"
     attribute: "sshd.AllowGroups"
     value: { list: [{ text: "ssh-users" }] }
+
+  # directive absente du fichier (sshd moderne : protocole 2 implicite)
+  - entity: "service:sshd"
+    attribute: "sshd.Protocol"
+    value: { absent: true }
 
   # Le cas qui compte : X11Forwarding n'apparaît qu'en commentaire dans le
   # fichier. L'attribut est donc ABSENT — le défaut du système s'applique,

@@ -8,6 +8,15 @@ expression: facts
             "service:sshd",
         ),
         attribute: Attribute(
+            "sshd.AllowGroups",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
             "sshd.AllowTcpForwarding",
         ),
         value: Absent,
@@ -26,11 +35,38 @@ expression: facts
             "service:sshd",
         ),
         attribute: Attribute(
+            "sshd.ClientAliveCountMax",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.ClientAliveInterval",
+        ),
+        value: Absent,
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
             "sshd.KbdInteractiveAuthentication",
         ),
         value: Text(
             "no",
         ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.LogLevel",
+        ),
+        value: Absent,
     },
     Fact {
         entity: EntityId(
@@ -51,6 +87,15 @@ expression: facts
         value: Int(
             4,
         ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.MaxSessions",
+        ),
+        value: Absent,
     },
     Fact {
         entity: EntityId(
@@ -120,6 +165,15 @@ expression: facts
         value: Text(
             "yes",
         ),
+    },
+    Fact {
+        entity: EntityId(
+            "service:sshd",
+        ),
+        attribute: Attribute(
+            "sshd.StrictModes",
+        ),
+        value: Absent,
     },
     Fact {
         entity: EntityId(
