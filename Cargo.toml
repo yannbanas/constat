@@ -50,7 +50,7 @@ blake3 = "1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 zstd = "0.13"
-redb = "2"
+redb = "4"
 # rustls synchrone, fournisseur ring fixé (pas d'aws-lc-rs : compilation
 # Windows sans cmake/NASM) — configuration partagée par agent, serveur et CLI.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std"] }
