@@ -79,7 +79,7 @@ jobs:
           # faisait échouer le téléchargement sans ce filtre.
           pattern: dist-*
       - name: Attacher les binaires à la release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           # La release et ses notes sont créées par `gh release create` ;
