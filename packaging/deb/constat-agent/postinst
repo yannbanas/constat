@@ -1,0 +1,22 @@
+#!/bin/sh
+# postinst du paquet constat-agent : répertoires, rechargement systemd.
+# Rien n'est activé automatiquement — la décision d'activer reste à
+# l'opérateur, comme pour `constat-agent install`.
+set -e
+
+case "$1" in
+    configure)
+        # Le magasin et les clés de l'agent : accès restreint.
+        install -d -m 0750 /var/lib/constat
+
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        echo "constat-agent : collecte planifiée NON activée par défaut. Pour l'activer :"
+        echo "  systemctl enable --now constat-agent.timer"
+        echo "Intervalle par défaut : 6 h. Poussée vers le serveur : /etc/constat/agent.env."
+        ;;
+esac
+
+exit 0

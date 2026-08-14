@@ -26,5 +26,24 @@ rustls = { workspace = true }
 # 1.10 au minimum : le module `pem` (PemObject) n'existe pas avant.
 rustls-pki-types = { workspace = true }
 
-[lints]
-workspace = true
+[target.'cfg(unix)'.dependencies]
+# §17, justification écrite : l'abandon de privilèges après collecte (§7.1)
+# exige setgroups/setresgid/setresuid/setuid/geteuid et la résolution
+# getpwnam_r — appels système sans interface dans la bibliothèque standard.
+# `libc` est la liaison brute minimale (aucun code de haut niveau, aucune
+# dépendance transitive) ; unix uniquement, rien n'entre dans le binaire
+# Windows. Un enrobage type `nix` ajouterait du code non audité pour six
+# appels triviaux.
+libc = "0.2"
+
+# Le workspace impose `unsafe_code = "forbid"` ; ce crate seul le rétrograde
+# en `deny` : les appels libc de l'abandon de privilèges (§7.1) sont de
+# l'unsafe inévitable, strictement borné au module `privileges::imp` (unix),
+# qui porte l'unique `allow` du crate avec sa justification. Les lints
+# clippy sont recopiés à l'identique du workspace.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"

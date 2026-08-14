@@ -1,0 +1,19 @@
+Package: constat-server
+Version: @VERSION@
+Architecture: @ARCH@
+Depends: constat-tools (= @VERSION@)
+Maintainer: Yann Banas <yannbanas@gmail.com>
+Section: admin
+Priority: optional
+Homepage: https://github.com/yannbanas/constat
+Description: Constat — serveur collecteur (réception mTLS)
+ Le serveur central Constat : réception des poussées d'agents en mTLS,
+ magasin adressé par contenu, aucun chemin de retour vers le parc (§17) —
+ compromettre le serveur ne donne aucun moyen d'agir sur les machines
+ auditées. Supervision par `constat-server status` (binaire, aucun port
+ supplémentaire).
+ .
+ Le service NE démarre PAS tant que /etc/constat/server.env ne fournit pas
+ le mTLS complet (certificat, clé, autorité des agents) : c'est volontaire.
+ .
+ Via constat-tools, installe aussi `constat` et `constat-verify`.

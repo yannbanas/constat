@@ -13,7 +13,7 @@ use constat_model::{
     AssetId, Attribute, Blob, BlobHash, CollectorId, EntityId, Fact, Snapshot, Timestamp, Value,
 };
 use constat_store::{Store, StoreError};
-use constat_time::{CoverageReport, Period, TimeError};
+use constat_time::{CoverageReport, Gap, GapReason, Period, TimeError};
 
 /// Erreur d'une requête : magasin ou calcul de couverture.
 #[derive(Debug, thiserror::Error)]
@@ -37,13 +37,26 @@ pub struct Observation {
 }
 
 /// Tous les snapshots référencés par le journal, dédupliqués et triés par date.
+///
+/// Un snapshot référencé mais absent du magasin est toléré si — et seulement
+/// si — son absence est **déclarée** par une purge journalisée (§16,
+/// [`constat_store::declared_purged`]) : il est alors simplement omis, et la
+/// période purgée apparaît via [`purge_gaps`]. Toute autre absence reste une
+/// erreur : la CLI ne masque jamais un magasin altéré.
 pub fn snapshots(store: &dyn Store) -> Result<Vec<(BlobHash, Snapshot)>, StoreError> {
+    let entries = store.entries()?;
+    let purged = constat_store::declared_purged(store, &entries)?;
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
-    for (_, entry) in store.entries()? {
+    for (_, entry) in entries {
         for sh in &entry.snapshots {
-            if seen.insert(*sh) {
-                out.push((*sh, store.get_snapshot(sh)?));
+            if !seen.insert(*sh) {
+                continue;
+            }
+            match store.get_snapshot(sh) {
+                Ok(snapshot) => out.push((*sh, snapshot)),
+                Err(StoreError::NotFound(_)) if purged.contains(sh) => {}
+                Err(e) => return Err(e),
             }
         }
     }
@@ -76,6 +89,35 @@ pub fn observations(store: &dyn Store) -> Result<Vec<Observation>, StoreError> {
                 }
             }
         }
+    }
+    Ok(out)
+}
+
+/// Les interruptions déclarées par les **purges de rétention journalisées**
+/// (§16) : un trou `[purge.from, purge.to]` par enregistrement `constat.purge`
+/// du magasin, avec [`GapReason::RetentionPurge`] — jamais masqué en `Unknown`.
+///
+/// Une déclaration illisible est une erreur : on ne calcule pas une
+/// couverture « honnête » sur une déclaration qu'on ne sait pas lire.
+pub fn purge_gaps(store: &dyn Store) -> Result<Vec<Gap>, QueryError> {
+    let collector = CollectorId(constat_store::PURGE_COLLECTOR.to_string());
+    let mut out = Vec::new();
+    for (_, snap) in snapshots(store)? {
+        let Some(blob_hash) = snap.blobs.get(&collector) else {
+            continue;
+        };
+        let blob = store.get_blob(blob_hash)?;
+        let declaration = constat_store::parse_purge_blob(&blob).map_err(|e| {
+            StoreError::Encoding(format!(
+                "déclaration de purge illisible (blob {}) : {e}",
+                blob_hash.to_hex()
+            ))
+        })?;
+        out.push(Gap {
+            from: declaration.from,
+            to: declaration.to,
+            reason: GapReason::RetentionPurge,
+        });
     }
     Ok(out)
 }
@@ -216,7 +258,9 @@ pub fn history(
         last.insert(o.asset.clone(), o.fact.value.clone());
     }
 
-    // Couverture : les dates de collecte des machines où l'entité vit.
+    // Couverture : les dates de collecte des machines où l'entité vit, plus
+    // les trous déclarés par les purges de rétention (§16) — une période
+    // purgée apparaît comme un trou `RetentionPurge`, jamais comme un `Unknown`.
     let times: Vec<Timestamp> = snapshots(store)?
         .iter()
         .filter(|(_, s)| relevant_assets.contains(&s.asset))
@@ -230,8 +274,10 @@ pub fn history(
             from: times.iter().min().copied().unwrap_or(Timestamp(0)),
             to: times.iter().max().copied().unwrap_or(Timestamp(0)),
         });
-        Some(crate::coverage::coverage_report(
+        let declared = purge_gaps(store)?;
+        Some(crate::coverage::coverage_report_declared(
             &times,
+            &declared,
             span,
             crate::coverage::DEFAULT_MAX_EXPECTED_GAP,
         )?)

@@ -1,0 +1,14 @@
+Package: constat-tools
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Yann Banas <yannbanas@gmail.com>
+Section: admin
+Priority: optional
+Homepage: https://github.com/yannbanas/constat
+Description: Constat — CLI d'interrogation et vérificateur autonome
+ La CLI `constat` (interrogation du magasin, assertions, dossier de preuve,
+ ancrage) et le vérificateur autonome `constat-verify`, qui contrôle un
+ export sans faire confiance à Constat (algorithme public dans FORMAT.md).
+ .
+ Paquet commun aux paquets constat-agent et constat-server : les deux en
+ dépendent, aucun binaire n'est dupliqué.

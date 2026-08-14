@@ -11,12 +11,14 @@
 //! constat anchor   --send https://tsa.exemple.fr/tsr
 //! constat export   --out ./export
 //! constat verify   ./export
+//! constat retention --check 1095j
+//! constat purge    --older-than 1095j --reason "rétention 3 ans (audit)"
 //! ```
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use constat_cli::{commands, segmentation, storeopen};
+use constat_cli::{commands, purge, segmentation, storeopen};
 
 #[derive(Parser)]
 #[command(
@@ -26,9 +28,12 @@ use constat_cli::{commands, segmentation, storeopen};
     long_about = "Constat enregistre l'état de configuration d'une infrastructure dans la \
                   durée, de façon non falsifiable, et produit la preuve qu'un auditeur \
                   accepte. Cette CLI interroge le magasin local : elle ne modifie rien, \
-                  jamais — à l'exception de `segmentation --record`, qui ajoute des faits \
-                  signés au journal (le verdict d'accessibilité est un constat comme un \
-                  autre, §14)."
+                  jamais — à deux exceptions près, assumées : `segmentation --record`, qui \
+                  ajoute des faits signés au journal (le verdict d'accessibilité est un \
+                  constat comme un autre, §14), et `purge`, la purge de rétention \
+                  journalisée (§16) — elle supprime les objets au-delà de la rétention et \
+                  déclare cette purge dans une nouvelle entrée signée ; les entrées de \
+                  journal, elles, ne sont jamais supprimées."
 )]
 struct Cli {
     /// Chemin du magasin (sinon variable CONSTAT_STORE, sinon ./constat.redb)
@@ -173,6 +178,38 @@ enum Command {
         #[arg(long, default_value = constat_cli::segmentation::DEFAULT_ASSET)]
         asset: String,
     },
+    /// Purge de rétention journalisée (§16) : supprime les objets plus vieux
+    /// que la durée et déclare la purge dans une nouvelle entrée signée —
+    /// irréversible, confirmation exigée sans --yes
+    Purge {
+        /// Durée de rétention : tout objet plus vieux est purgé, ex. 1095j
+        #[arg(long, value_name = "DURÉE")]
+        older_than: String,
+        /// Motif de la purge, inscrit dans la déclaration signée
+        #[arg(long, value_name = "MOTIF")]
+        reason: String,
+        /// Répertoire des clés de l'agent (agent.key) pour signer la
+        /// déclaration
+        #[arg(long, value_name = "DOSSIER")]
+        keys: Option<PathBuf>,
+        /// Simulation : affiche ce qui serait purgé, ne modifie rien
+        #[arg(long)]
+        dry_run: bool,
+        /// Saute la confirmation interactive (une purge est irréversible)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Politique de rétention, en lecture seule : âge des données (--show,
+    /// défaut) ou simulation d'une purge (--check <durée>)
+    Retention {
+        /// Affiche l'âge des données et les purges déjà déclarées (défaut)
+        #[arg(long, conflicts_with = "check")]
+        show: bool,
+        /// Montre ce qu'une rétention de cette durée purgerait, sans rien
+        /// modifier, ex. --check 1095j
+        #[arg(long, value_name = "DURÉE")]
+        check: Option<String>,
+    },
     /// Rappelle comment vérifier un dossier SANS Constat (binaire séparé, §10.3)
     Verify {
         /// Répertoire d'export à vérifier (produit par `constat export --out`)
@@ -312,6 +349,46 @@ fn main() -> miette::Result<()> {
                 // Conventions de Calque : 1 violation, 3 non concluant.
                 std::process::exit(i32::from(code));
             }
+        }
+        Command::Purge {
+            older_than,
+            reason,
+            keys,
+            dry_run,
+            yes,
+        } => {
+            // Type concret : la purge exige PurgeableStore (suppression) et
+            // MultiJournalStore (voir tous les journaux) — le pouvoir
+            // d'écriture est porté par le type (§16).
+            let mut store = storeopen::open_redb(&store_path)?;
+            let args = purge::PurgeArgs {
+                older_than: &older_than,
+                reason: &reason,
+                keys: keys.as_deref(),
+                dry_run,
+                assume_yes: yes,
+            };
+            let out = purge::cmd_purge(&mut store, &args, |recap| {
+                // Confirmation interactive : le récapitulatif d'abord, la
+                // question ensuite — une purge est irréversible.
+                println!("{recap}\n");
+                print!("Une purge est irréversible. Confirmer ? (oui/non) : ");
+                use std::io::Write as _;
+                let _ = std::io::stdout().flush();
+                let mut line = String::new();
+                if std::io::stdin().read_line(&mut line).is_err() {
+                    return false;
+                }
+                line.trim().eq_ignore_ascii_case("oui")
+            })?;
+            println!("{out}");
+        }
+        Command::Retention { show: _, check } => {
+            let store = storeopen::open_redb(&store_path)?;
+            let args = purge::RetentionArgs {
+                check: check.as_deref(),
+            };
+            println!("{}", purge::cmd_retention(&store, &args)?);
         }
         Command::Verify { export } => {
             // Pas d'ouverture du magasin : cette commande n'est qu'un rappel,

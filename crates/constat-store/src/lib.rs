@@ -35,12 +35,18 @@ use serde::{Deserialize, Serialize};
 pub mod export;
 pub mod journal;
 pub mod memory;
+pub mod purge;
 pub mod redb_store;
 pub mod signer;
 
 pub use export::{export_journal, export_store};
 pub use journal::{append_signed, entry_hash, signable_bytes, verify_chain, ChainError};
 pub use memory::MemoryStore;
+pub use purge::{
+    build_purge_blob, declared_purged, execute_plan, manifest_hash, parse_purge_blob, plan_purge,
+    purge_older_than, PurgeDeclaration, PurgeError, PurgePlan, PurgeReport, PURGE_ASSET,
+    PURGE_COLLECTOR,
+};
 pub use redb_store::RedbStore;
 pub use signer::Signer;
 
@@ -88,6 +94,18 @@ pub trait Store {
 
     fn put_snapshot(&mut self, snapshot: &Snapshot) -> Result<BlobHash, StoreError>;
     fn get_snapshot(&self, hash: &BlobHash) -> Result<Snapshot, StoreError>;
+
+    /// Le snapshot est-il présent ? Méthode ADDITIVE (défaut fourni pour ne
+    /// casser aucune implémentation existante) : les backends peuvent la
+    /// spécialiser pour éviter un décodage complet. Introduite pour la purge
+    /// de rétention (§16), qui doit distinguer « absent » d'« altéré ».
+    fn has_snapshot(&self, hash: &BlobHash) -> Result<bool, StoreError> {
+        match self.get_snapshot(hash) {
+            Ok(_) => Ok(true),
+            Err(StoreError::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
 
     fn append_entry(&mut self, entry: &JournalEntry) -> Result<BlobHash, StoreError>;
     fn last_entry(&self) -> Result<Option<(BlobHash, JournalEntry)>, StoreError>;
@@ -194,4 +212,34 @@ pub trait MultiJournalStore: Store {
     fn root_of(&self, journal: &JournalId) -> Result<Option<BlobHash>, StoreError> {
         Ok(self.last_entry_of(journal)?.map(|(hash, _)| hash))
     }
+}
+
+/// Suppression d'objets pour la purge de rétention journalisée (§16) —
+/// extension ADDITIVE de [`Store`], sur le modèle de [`MultiJournalStore`].
+///
+/// # Design retenu
+///
+/// Un sous-trait plutôt qu'une évolution de [`Store`] : la suppression est un
+/// pouvoir que la quasi-totalité des consommateurs (CLI en lecture, agent,
+/// vérificateur) ne doit **jamais** détenir — le type dit qui peut supprimer.
+/// Seule la purge ([`purge::purge_older_than`]) l'exige, et elle exige aussi
+/// [`MultiJournalStore`] : pour décider qu'un objet n'est plus référencé, il
+/// faut voir **tous** les journaux, nommés compris — un magasin qui ne sait
+/// pas les énumérer ne peut pas purger sans risquer de trouer la chaîne d'un
+/// autre signataire.
+///
+/// # Ce que ces méthodes ne touchent JAMAIS
+///
+/// Les **entrées de journal**. La chaîne est la preuve : elle ne rétrécit
+/// jamais, quelle que soit la rétention. Seuls blobs et snapshots — le
+/// contenu — sont supprimables, et uniquement après que la purge a été
+/// **déclarée** dans une nouvelle entrée signée (voir [`purge`]).
+pub trait PurgeableStore: MultiJournalStore {
+    /// Supprime le blob `hash` s'il existe. `Ok(true)` s'il existait,
+    /// `Ok(false)` sinon (idempotent). Le journal n'est pas modifié.
+    fn delete_blob(&mut self, hash: &BlobHash) -> Result<bool, StoreError>;
+
+    /// Supprime le snapshot `hash` s'il existe. `Ok(true)` s'il existait,
+    /// `Ok(false)` sinon (idempotent). Le journal n'est pas modifié.
+    fn delete_snapshot(&mut self, hash: &BlobHash) -> Result<bool, StoreError>;
 }

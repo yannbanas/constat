@@ -65,9 +65,75 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Paquets Linux : .deb et .rpm assemblés par packaging/build-packages.sh
+  # (dpkg-deb + rpmbuild sur des squelettes versionnés — explicite,
+  # auditable, sans magie). aarch64 est construit nativement sur le runner
+  # ARM : aucun cross-toolchain.
+  paquets-linux:
+    name: paquets Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Outils de paquetage
+        run: sudo apt-get update && sudo apt-get install -y rpm shellcheck
+      - name: shellcheck des scripts de paquetage
+        run: |
+          shellcheck packaging/build-packages.sh \
+            packaging/deb/constat-agent/postinst packaging/deb/constat-agent/prerm \
+            packaging/deb/constat-agent/postrm \
+            packaging/deb/constat-server/postinst packaging/deb/constat-server/prerm \
+            packaging/deb/constat-server/postrm
+      - name: Construction des paquets (.deb + .rpm, empreintes SHA-256)
+        run: bash packaging/build-packages.sh --target ${{ matrix.target }} --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-paquets-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # SBOM de la version (§17) : nomenclature SPDX générée par syft depuis les
+  # sources au tag exact — c'est Cargo.lock (--locked) qui décrit, au commit
+  # près, les dépendances effectivement compilées dans les binaires. Honnête :
+  # les binaires étant «strippés», ils ne se décrivent pas eux-mêmes ; la
+  # nomenclature couvre le graphe de dépendances verrouillé du build.
+  sbom:
+    name: SBOM (SPDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Générer la nomenclature SPDX
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          "${{ steps.syft.outputs.cmd }}" scan dir:. \
+            --source-name constat --source-version "${version#v}" \
+            -o "spdx-json=dist/constat-${version}-sbom.spdx.json"
+          cd dist
+          sha256sum "constat-${version}-sbom.spdx.json" > "constat-${version}-sbom.spdx.json.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-sbom
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: release GitHub
-    needs: binaires
+    needs: [binaires, paquets-linux, sbom]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -115,3 +181,31 @@ jobs:
           provenance: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Provenance SLSA des artefacts (§17) : attestation signée par GitHub
+  # (Sigstore) liant chaque archive, paquet et SBOM au commit, au workflow
+  # et au runner qui les ont produits. Vérifiable par quiconque, sans accès
+  # au dépôt privé de qui que ce soit :
+  #   gh attestation verify constat-vX.Y.Z-<cible>.tar.gz -R yannbanas/constat
+  attestation:
+    name: provenance SLSA (attestations)
+    needs: [binaires, paquets-linux, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: dist-*
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.spdx.json

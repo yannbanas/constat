@@ -18,9 +18,14 @@
 //! - **Expurgation avant émission** (§7.2) : `redact` s'applique avant toute
 //!   écriture dans le magasin — le serveur ne reçoit jamais autre chose que
 //!   la forme expurgée.
+//! - **Privilèges minimaux** (§7.1) : démarré root en mode `--once` (Unix),
+//!   l'agent abandonne définitivement ses privilèges après la collecte et
+//!   **avant** toute connexion réseau — séquence, modèle de menace et
+//!   compromis du mode continu dans le module [`privileges`].
 
 pub mod install;
 pub mod keys;
+pub mod privileges;
 pub mod push;
 pub mod run;
 pub mod schedule;

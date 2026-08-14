@@ -96,9 +96,95 @@ désignant l'objet et la vérification en cause.
    l'entrée i » sinon.
 6. **Références** — pour chaque entrée : chaque empreinte de `snapshots`
    doit exister dans `snapshots/` ; pour chaque snapshot, chaque empreinte
-   de `blobs` doit exister dans `blobs/`. Échec « objet manquant » sinon.
+   de `blobs` doit exister dans `blobs/`. Échec « objet manquant » sinon —
+   à **une** exception près : une absence **déclarée par une purge
+   journalisée postérieure** (voir la section « Objets purgés » ci-dessous).
 7. **Racine** — `BLAKE3(octets du dernier fichier d'entrée)`. C'est la
    valeur à comparer aux ancrages externes.
+
+## 4 bis. Objets purgés — les absences déclarées (§16 de l'architecture)
+
+> Une suppression liée à la rétention crée un trou dans les données, et un
+> trou non déclaré est indistinguable d'un effacement malveillant. La purge
+> écrit donc dans le journal **qu'elle a eu lieu**, sur quelle période et
+> pour quel motif, sans réécrire la chaîne.
+
+**Note de version du format.** Cette section est une extension **additive**
+introduite après la v0.3.0 : un export produit avant la purge (sans blob
+`constat.purge`) reste valide et se vérifie exactement comme avant — l'étape
+6 historique s'applique alors sans exception. Un vérificateur antérieur qui
+rencontre un export purgé échouera sur « objet manquant » : c'est le
+comportement sûr, jamais un faux « OK ».
+
+### 4 bis.1 L'enregistrement de purge
+
+Une purge est déclarée par un blob ordinaire du **collecteur réservé**
+`constat.purge`, référencé par un snapshot (machine `constat`), lui-même
+référencé par une **nouvelle entrée signée** — la chaîne existante n'est
+jamais réécrite, la déclaration s'ajoute à la fin.
+
+Le blob porte :
+
+- dans `facts`, une entité `purge:<horodatage ms>` avec exactement :
+
+  | attribut | type | contenu |
+  |---|---|---|
+  | `purge.from` | entier | début de la période purgée (ms UTC) |
+  | `purge.to` | entier | fin de la période purgée (ms UTC), ≥ `purge.from` |
+  | `purge.reason` | texte | motif (une seule ligne) |
+  | `purge.objects` | entier | nombre d'empreintes purgées |
+  | `purge.manifest` | *empreinte* (variante `Fingerprint`) | BLAKE3 de la **liste canonique** (ci-dessous) |
+
+- dans `raw` (UTF-8), un document texte lisible qui contient la **liste
+  complète des empreintes purgées** : toute ligne du document composée —
+  après suppression des blancs de début et de fin — d'exactement **64
+  caractères hexadécimaux minuscules** est une empreinte de la liste ; toute
+  autre ligne est du commentaire lisible (date, motif, période…).
+
+**Liste canonique** : les empreintes relues de `raw`, triées par ordre
+croissant d'octets et dédupliquées. **Manifeste** : BLAKE3 de l'encodage
+CBOR canonique de cette liste (un tableau de tableaux de 32 entiers — le
+même encodage que partout ailleurs dans ce format).
+
+### 4 bis.2 Validité d'une déclaration
+
+Une déclaration n'est prise en compte que si **tout** ce qui suit est vrai
+(sinon : échec « déclaration de purge invalide », l'export est refusé) :
+
+1. le blob est présent dans l'export et son intégrité est vérifiée (étape 2) ;
+2. `purge.from` ≤ `purge.to` et `purge.objects` ≥ 0 ;
+3. le nombre d'empreintes de la liste canonique est égal à `purge.objects` ;
+4. le manifeste recalculé sur la liste canonique est égal à `purge.manifest`.
+
+### 4 bis.3 L'étape 6 modifiée — algorithme exact
+
+Avant l'étape 6, construire l'index des purges : pour chaque entrée `j` (de
+la genèse à la racine), pour chaque snapshot présent référencé par `j` qui
+contient la clé de collecteur `constat.purge`, lire et valider la
+déclaration ; pour chaque empreinte `h` de sa liste canonique, retenir
+`decl(h)` = le **plus petit** `j` qui la déclare.
+
+À l'étape 6, une empreinte référencée à l'entrée `i` (snapshot manquant, ou
+blob manquant référencé par un snapshot de l'entrée `i`) mais absente de
+l'export est **tolérée** si et seulement si `decl(h)` existe et
+`decl(h) > i` — la déclaration est **strictement postérieure** dans la
+chaîne à la référence : une purge suit toujours la donnée qu'elle supprime,
+jamais l'inverse. Toute autre absence reste un échec « objet manquant ».
+
+Le résultat compte les empreintes tolérées (`purged_count`) et restitue
+chaque déclaration (période, motif, nombre d'objets, manifeste) :
+« cohérent — N objet(s) purgé(s) déclaré(s) (période …, motif …) ».
+
+### 4 bis.4 Ce que la purge déclarée ne permet pas
+
+- Elle ne supprime **jamais** d'entrée de journal : les fichiers `0.cbor` …
+  `N.cbor` restent des indices consécutifs, sans trou, et la chaîne se
+  vérifie intégralement (étapes 3 à 5 inchangées).
+- Elle ne couvre pas une entrée manquante, une signature invalide, ni un
+  objet **présent mais altéré** : seules les *absences* listées dans un
+  manifeste valide et postérieur sont tolérées.
+- Un objet présent dont l'empreinte figure dans un manifeste se vérifie
+  normalement : déclarer plus que ce qui a réellement disparu est bénin.
 
 ## 5. Ce que cette vérification prouve — et ne prouve pas
 
@@ -121,8 +207,9 @@ artefact référencé, sans posséder la clé privée.
 ## 6. Réimplémentation
 
 Un vérificateur indépendant a besoin de : un décodeur CBOR, BLAKE3, Ed25519.
-Les étapes 1 à 7 ci-dessus sont l'intégralité de l'algorithme. La seule
-subtilité est l'étape 5 : les octets signables sont le **ré-encodage
-canonique** de l'entrée avec `signature: []` — l'encodage est déterministe
-(maps ordonnées, entiers, pas de flottants), donc le ré-encodage de l'entrée
-décodée redonne les octets d'origine, au champ `signature` près.
+Les étapes 1 à 7 ci-dessus (plus la section 4 bis si l'export contient des
+purges déclarées) sont l'intégralité de l'algorithme. La seule subtilité est
+l'étape 5 : les octets signables sont le **ré-encodage canonique** de
+l'entrée avec `signature: []` — l'encodage est déterministe (maps ordonnées,
+entiers, pas de flottants), donc le ré-encodage de l'entrée décodée redonne
+les octets d'origine, au champ `signature` près.

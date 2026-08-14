@@ -50,7 +50,7 @@ use constat_model::{
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 use crate::journal::check_journal_signature;
-use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};
+use crate::{JournalEntry, JournalId, MultiJournalStore, PurgeableStore, Store, StoreError};
 
 /// Table des blobs : empreinte → CBOR canonique compressé zstd.
 const BLOBS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blobs");
@@ -192,6 +192,25 @@ impl RedbStore {
     fn decode_entry(bytes: &[u8]) -> Result<JournalEntry, StoreError> {
         from_canonical_bytes(bytes).map_err(StoreError::from)
     }
+
+    /// Supprime une clé d'une table adressée par empreinte. Retourne `true`
+    /// si la clé existait. Si elle n'existe pas, **aucune transaction
+    /// d'écriture** n'est ouverte : le fichier n'est pas modifié d'un octet.
+    fn remove_raw(
+        &self,
+        def: TableDefinition<'_, &[u8], &[u8]>,
+        hash: &BlobHash,
+    ) -> Result<bool, StoreError> {
+        if !self.contains(def, hash)? {
+            return Ok(false);
+        }
+        let tx = self.db.begin_write().map_err(backend)?;
+        let mut table = tx.open_table(def).map_err(backend)?;
+        let existed = table.remove(hash.0.as_slice()).map_err(backend)?.is_some();
+        drop(table);
+        tx.commit().map_err(backend)?;
+        Ok(existed)
+    }
 }
 
 impl Store for RedbStore {
@@ -266,6 +285,10 @@ impl Store for RedbStore {
             )));
         }
         Ok(snapshot)
+    }
+
+    fn has_snapshot(&self, hash: &BlobHash) -> Result<bool, StoreError> {
+        self.contains(SNAPSHOTS, hash)
     }
 
     fn append_entry(&mut self, entry: &JournalEntry) -> Result<BlobHash, StoreError> {
@@ -462,5 +485,18 @@ impl MultiJournalStore for RedbStore {
             }
         }
         Ok(out)
+    }
+}
+
+/// Suppression pour la purge de rétention (§16) : blobs et snapshots
+/// uniquement — les tables `journal`, `entries` et `journaux_nommes` ne sont
+/// **jamais** touchées, la chaîne est la preuve.
+impl PurgeableStore for RedbStore {
+    fn delete_blob(&mut self, hash: &BlobHash) -> Result<bool, StoreError> {
+        self.remove_raw(BLOBS, hash)
+    }
+
+    fn delete_snapshot(&mut self, hash: &BlobHash) -> Result<bool, StoreError> {
+        self.remove_raw(SNAPSHOTS, hash)
     }
 }

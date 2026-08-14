@@ -12,6 +12,11 @@
 //! - **Lecture seule** sur la machine auditée : les seules écritures sont le
 //!   magasin local, les fichiers de clés — et, sur demande explicite de
 //!   l'opérateur, les fichiers de planification de `install`.
+//! - **Privilèges minimaux.** Sur Unix, en mode `--once` démarré root,
+//!   l'agent abandonne définitivement ses privilèges après la collecte et
+//!   **avant** toute connexion réseau ; sans abandon réussi, la poussée est
+//!   refusée (échappatoire explicite : `--allow-root-push`). Modèle de
+//!   menace et compromis du mode continu : [`constat_agent::privileges`].
 //! - **Binaire unique, sans dépendance** d'exécution. Même le mode continu
 //!   (`run --every`) et l'installation (`install`) n'en ajoutent aucune :
 //!   la boucle dort avec `std::thread::sleep`, la planification système est
@@ -21,7 +26,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
-use constat_agent::{install, keys, push, run, schedule, status, storeopen};
+use constat_agent::{install, keys, privileges, push, run, schedule, status, storeopen};
 use constat_model::AssetId;
 use constat_store::{Signer, Store};
 use miette::miette;
@@ -69,6 +74,16 @@ enum Command {
         push: bool,
         #[command(flatten)]
         push_opts: PushOpts,
+        /// Unix, mode --once démarré root : utilisateur vers lequel les
+        /// privilèges sont définitivement abandonnés après la collecte et
+        /// AVANT la poussée (défaut : constat s'il existe, sinon nobody)
+        #[arg(long, value_name = "UTILISATEUR")]
+        run_as: Option<String>,
+        /// Échappatoire explicite et DÉCONSEILLÉE : pousser sans abandonner
+        /// les privilèges root (à réserver aux environnements où l'abandon
+        /// casse la poussée — sans elle, l'abandon est obligatoire, §7.1)
+        #[arg(long)]
+        allow_root_push: bool,
         /// Réservée aux tests : borne le nombre de cycles du mode --every
         /// puis rend la main (la boucle est sinon infinie)
         #[arg(long, hide = true, value_name = "N")]
@@ -233,14 +248,36 @@ fn main() -> miette::Result<()> {
             asset,
             push: push_flag,
             push_opts,
+            run_as,
+            allow_root_push,
             max_cycles,
         } => {
+            let privilege_opts = run_as.is_some() || allow_root_push;
+            if privilege_opts && !cfg!(unix) {
+                return Err(miette!(
+                    help = "l'abandon de privilèges est un mécanisme Unix (setresuid) ; \
+                            sous Windows la tâche planifiée tourne en SYSTEM, borné \
+                            autrement — voir `constat-agent install`",
+                    "--run-as/--allow-root-push : options Unix uniquement"
+                ));
+            }
             let config = RunConfig {
                 store,
                 keys: keys_dir,
                 asset,
                 push: push_opts.for_run(push_flag)?,
+                drop_after_collect: once,
+                run_as,
+                allow_root_push,
             };
+            if privilege_opts && config.push.is_none() {
+                return Err(miette!(
+                    help = "l'abandon de privilèges borne la phase réseau ; sans poussée, \
+                            le processus se termine juste après la collecte et il n'y a \
+                            rien à borner",
+                    "--run-as/--allow-root-push exigent --push"
+                ));
+            }
             match (once, every) {
                 (true, Some(_)) => Err(miette!(
                     help = "--once fait une collecte puis termine ; --every boucle",
@@ -258,9 +295,30 @@ fn main() -> miette::Result<()> {
                             "--max-cycles n'a pas de sens avec --once"
                         ));
                     }
+                    if privilege_opts && !privileges::running_as_root() {
+                        return Err(miette!(
+                            help = "--run-as/--allow-root-push gouvernent l'abandon de \
+                                    privilèges d'un agent démarré root ; sans euid 0, il \
+                                    n'y a rien à abandonner",
+                            "--run-as/--allow-root-push fournis mais l'agent ne démarre \
+                             pas en root"
+                        ));
+                    }
                     cycle_once(&config)
                 }
-                (false, Some(every)) => cmd_run_every(&every, max_cycles, &config),
+                (false, Some(every)) => {
+                    if privilege_opts {
+                        return Err(miette!(
+                            help = "en mode continu, l'agent n'abandonne PAS ses privilèges \
+                                    in-process : la collecte suivante devrait relire les \
+                                    fichiers protégés. La réduction vient du durcissement \
+                                    systemd — préférez `constat-agent install` (timer + \
+                                    `run --once`, abandon systématique avant la poussée)",
+                            "--run-as/--allow-root-push n'existent qu'en mode --once"
+                        ));
+                    }
+                    cmd_run_every(&every, max_cycles, &config)
+                }
             }
         }
         Command::Keygen {
@@ -301,6 +359,18 @@ struct RunConfig {
     /// Poussée après collecte réussie (`--push`) ; l'échec de poussée est
     /// déclaré mais jamais bloquant.
     push: Option<push::PushConfig>,
+    /// Mode `--once` : sur Unix démarré root, les privilèges sont
+    /// définitivement abandonnés après la collecte et avant la poussée
+    /// (§7.1, voir [`constat_agent::privileges`]). Faux en mode `--every` :
+    /// le cycle suivant doit relire les fichiers protégés — compromis
+    /// documenté, la réduction vient alors du durcissement systemd.
+    drop_after_collect: bool,
+    /// Utilisateur cible de l'abandon (`--run-as`) ; défaut : `constat`
+    /// s'il existe, sinon `nobody`.
+    run_as: Option<String>,
+    /// Échappatoire explicite et déconseillée (`--allow-root-push`) :
+    /// pousser sans abandonner. Sans elle, l'abandon est obligatoire.
+    allow_root_push: bool,
 }
 
 /// Un cycle complet : collecter, journaliser, et pousser si demandé.
@@ -369,23 +439,93 @@ fn cycle_once(config: &RunConfig) -> miette::Result<()> {
         &report.entry.to_hex()[..8]
     );
 
-    if let Some(push_config) = &config.push {
-        push_after_collect(push_config, store.as_ref(), &signer, &report.asset.0);
+    push_phase(config, store, &signer, &report.asset.0)
+}
+
+/// La phase réseau d'un cycle — et l'endroit où §7.1 (« abandon après
+/// collecte ») se joue.
+///
+/// Sur Unix, en mode `--once` démarré root, l'ordre est strict : le lot et
+/// le matériel TLS sont préparés **en mémoire**, le magasin est fermé, les
+/// privilèges sont définitivement abandonnés
+/// ([`constat_agent::privileges::drop_now`]), et alors seulement la
+/// connexion sort. Un échec d'abandon **refuse la poussée** (erreur fatale)
+/// — sauf `--allow-root-push`, échappatoire explicite et déconseillée. Un
+/// échec de la poussée elle-même reste déclaré et non bloquant, comme
+/// toujours.
+///
+/// Le lot est construit avant l'abandon parce que le magasin redb ne
+/// s'ouvre qu'en lecture-écriture : le rouvrir en tant qu'utilisateur cible
+/// exigerait de rendre le magasin inscriptible par lui — pire que garder en
+/// mémoire un lot déjà expurgé, qui est exactement ce qui part sur le
+/// réseau. Même logique pour le matériel TLS : chargé avant l'abandon, la
+/// clé cliente peut rester lisible par root seul (0600).
+fn push_phase(
+    config: &RunConfig,
+    store: Box<dyn Store>,
+    signer: &Signer,
+    asset: &str,
+) -> miette::Result<()> {
+    let Some(push_config) = &config.push else {
+        return Ok(());
+    };
+    if !(config.drop_after_collect && privileges::running_as_root()) {
+        // Sans privilèges à abandonner (agent non root, Windows) ou en mode
+        // continu (compromis documenté : l'abandon rendrait la collecte
+        // suivante impossible), la poussée part telle quelle.
+        push_after_collect(push_config, store.as_ref(), signer, asset);
+        return Ok(());
     }
+    if config.allow_root_push {
+        println!(
+            "  AVERTISSEMENT : --allow-root-push — poussée SANS abandon de privilèges \
+             (déconseillé, §7.1)."
+        );
+        push_after_collect(push_config, store.as_ref(), signer, asset);
+        return Ok(());
+    }
+
+    // Tout ce que la poussée relira est préparé AVANT l'abandon…
+    let prepared = push::build_batch(
+        store.as_ref(),
+        signer.verifying_key().to_bytes(),
+        asset.to_string(),
+    )
+    .and_then(|batch| push::load_tls_config(push_config).map(|tls| (batch, tls)));
+    // …le magasin est fermé (plus aucun descripteur ouvert)…
+    drop(store);
+    // …et les privilèges abandonnés, définitivement, avant toute connexion.
+    // Un échec ici est FATAL : jamais de poussée root par accident.
+    let target = privileges::drop_now(config.run_as.as_deref())?;
+    println!(
+        "  privilèges abandonnés avant la poussée : {} (uid {}, gid {}) — \
+         réacquisition vérifiée impossible.",
+        target.name, target.uid, target.gid
+    );
+
+    let result = prepared
+        .and_then(|(batch, tls)| push::push_with_tls(push_config, tls, &batch).map(|()| batch));
+    report_push_result(&push_config.server_url, result);
     Ok(())
 }
 
-/// Poussée post-collecte. L'échec est **déclaré, jamais bloquant** : la
-/// collecte locale est déjà journalisée — c'est elle, la preuve — et la
-/// poussée suivante rattrape tout, puisqu'elle est idempotente (le lot
-/// émet l'intégralité du magasin, le serveur dédoublonne).
+/// Poussée post-collecte sans abandon préalable (agent non root, Windows,
+/// mode continu, ou `--allow-root-push`).
 fn push_after_collect(config: &push::PushConfig, store: &dyn Store, signer: &Signer, asset: &str) {
     let result = push::build_batch(store, signer.verifying_key().to_bytes(), asset.to_string())
         .and_then(|batch| push::push(config, &batch).map(|()| batch));
+    report_push_result(&config.server_url, result);
+}
+
+/// Compte rendu d'une poussée. L'échec est **déclaré, jamais bloquant** : la
+/// collecte locale est déjà journalisée — c'est elle, la preuve — et la
+/// poussée suivante rattrape tout, puisqu'elle est idempotente (le lot
+/// émet l'intégralité du magasin, le serveur dédoublonne).
+fn report_push_result(server_url: &str, result: Result<push::PushBatch, push::PushError>) {
     match result {
         Ok(batch) => println!(
             "  poussée acceptée par {} : {} blob(s), {} snapshot(s), {} entrée(s) de journal.",
-            config.server_url,
+            server_url,
             batch.blobs.len(),
             batch.snapshots.len(),
             batch.entries.len()
@@ -393,7 +533,7 @@ fn push_after_collect(config: &push::PushConfig, store: &dyn Store, signer: &Sig
         Err(e) => println!(
             "  poussée vers {} ÉCHOUÉE : {e}\n  (déclarée, non bloquante : la collecte \
              locale est journalisée, la prochaine poussée rattrapera — idempotente)",
-            config.server_url
+            server_url
         ),
     }
 }
@@ -406,6 +546,18 @@ fn cmd_run_every(every: &str, max_cycles: Option<u64>, config: &RunConfig) -> mi
         "Collecte planifiée toutes les {every}, gigue ±10 %. Arrêt : Ctrl-C — brutal \
          mais sans danger, le magasin est transactionnel et la poussée idempotente."
     );
+    if privileges::running_as_root() && config.push.is_some() {
+        // Compromis documenté (§7.1, module `privileges`) : en mode continu,
+        // pas d'abandon in-process — dit à l'opérateur, pas seulement dans
+        // la documentation.
+        println!(
+            "Mode continu démarré root : PAS d'abandon de privilèges in-process (la \
+             collecte suivante doit relire les fichiers protégés) ; les poussées \
+             s'exécutent donc en root. La réduction vient du durcissement du service \
+             (voir `constat-agent install`). Mode recommandé : timer système + \
+             `run --once`, qui abandonne systématiquement avant chaque poussée."
+        );
+    }
     let options = schedule::EveryOptions {
         interval,
         max_cycles,
@@ -524,6 +676,16 @@ fn cmd_install(args: InstallArgs) -> miette::Result<()> {
                 );
             }
 
+            println!("Modèle de privilèges (§7.1) :");
+            println!(
+                "  Le service démarre root (lire /etc/shadow l'exige), borné par les\n\
+                 \x20 directives commentées dans l'unité. En mode --once — celui du timer —\n\
+                 \x20 l'agent abandonne définitivement ses privilèges après la collecte et\n\
+                 \x20 AVANT toute connexion réseau (--run-as ; défaut : constat, sinon\n\
+                 \x20 nobody). Le mode continu `run --every` ne peut pas abandonner\n\
+                 \x20 in-process (la collecte suivante relirait les fichiers protégés) : sa\n\
+                 \x20 réduction viendrait du seul durcissement systemd — préférez le timer.\n"
+            );
             println!("Avant la première collecte (une fois) :");
             if let Some(dir) = install::parent_unix(&options.store) {
                 println!("  mkdir -p {dir}");
@@ -556,6 +718,16 @@ fn cmd_install(args: InstallArgs) -> miette::Result<()> {
                 );
             }
 
+            println!("Modèle de privilèges (§7.1) :");
+            println!(
+                "  La tâche tourne en SYSTEM : les lectures qu'exige la collecte (SAM,\n\
+                 \x20 GPO appliquées, registre protégé) sont refusées à un compte à faible\n\
+                 \x20 privilège, et Windows n'a pas d'équivalent de CAP_DAC_READ_SEARCH —\n\
+                 \x20 l'abandon in-process du monde Unix n'a pas de traduction ici. SYSTEM\n\
+                 \x20 reste borné : aucun port en écoute, aucune exécution de code envoyé,\n\
+                 \x20 lecture seule hors magasin/clés, une heure d'exécution au plus,\n\
+                 \x20 jamais deux instances (détail dans le XML généré).\n"
+            );
             println!("Avant la première collecte (une fois, en console administrateur) :");
             println!("  \"{}\" keygen --keys \"{}\"\n", options.exe, options.keys);
             println!("Pour enregistrer la tâche (la décision reste à l'opérateur) :");

@@ -18,5 +18,6 @@
 //!   publique de signature.
 
 pub mod inventory;
+pub mod monitor;
 pub mod receive;
 pub mod serve;

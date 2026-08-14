@@ -116,11 +116,26 @@ fn evaluate_all(
         .iter()
         .map(|(_, s)| (s.asset.clone(), s.at))
         .collect();
-    let inputs = eval::build_inputs(&obs, &snap_times, period, DEFAULT_MAX_EXPECTED_GAP)
-        .into_diagnostic()?;
+    // Les purges de rétention journalisées (§16) sont des interruptions
+    // déclarées : une période purgée apparaît comme un trou `RetentionPurge`
+    // dans chaque couverture, jamais comme un trou inexpliqué.
+    let purge_gaps = queries::purge_gaps(store).into_diagnostic()?;
+    let inputs = eval::build_inputs_with_gaps(
+        &obs,
+        &snap_times,
+        &purge_gaps,
+        period,
+        DEFAULT_MAX_EXPECTED_GAP,
+    )
+    .into_diagnostic()?;
     let times: Vec<Timestamp> = snap_times.iter().map(|(_, t)| *t).collect();
-    let park_coverage = crate::coverage::coverage_report(&times, period, DEFAULT_MAX_EXPECTED_GAP)
-        .into_diagnostic()?;
+    let park_coverage = crate::coverage::coverage_report_declared(
+        &times,
+        &purge_gaps,
+        period,
+        DEFAULT_MAX_EXPECTED_GAP,
+    )
+    .into_diagnostic()?;
     let mut results = Vec::with_capacity(assertions.len());
     for a in assertions {
         results.push(eval::evaluate_park(a, &inputs, park_coverage.clone()).into_diagnostic()?);

@@ -1,0 +1,34 @@
+#!/bin/sh
+# postinst du paquet constat-server : utilisateur système `constat`,
+# répertoire du magasin, rechargement systemd. Rien n'est activé
+# automatiquement : le serveur exige un mTLS complet, que l'opérateur doit
+# d'abord fournir.
+set -e
+
+case "$1" in
+    configure)
+        # Utilisateur système sans connexion : le service ne tourne pas root.
+        if ! getent group constat >/dev/null; then
+            groupadd --system constat
+        fi
+        if ! getent passwd constat >/dev/null; then
+            useradd --system --gid constat --home-dir /var/lib/constat \
+                --no-create-home --shell /usr/sbin/nologin \
+                --comment "Serveur Constat" constat
+        fi
+
+        # Le magasin central : le serveur écrit, personne d'autre ne lit.
+        install -d -m 0750 -o constat -g constat /var/lib/constat
+
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        echo "constat-server : service NON activé. Avant de l'activer :"
+        echo "  1. déposez certificat, clé et autorité des agents dans /etc/constat/ ;"
+        echo "  2. vérifiez /etc/constat/server.env (chemins mTLS) ;"
+        echo "  3. systemctl enable --now constat-server.service"
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,18 @@
+# Unité livrée par le paquet constat-agent — équivalente à la sortie de
+# `constat-agent install --print --every 6h`.
+[Unit]
+Description=Constat — collecte planifiée (intervalle 21600 s)
+
+[Timer]
+# Première collecte peu après l'amorçage, puis à intervalle régulier.
+OnBootSec=2min
+OnUnitActiveSec=21600
+# Gigue : jusqu'à 10 % de retard aléatoire, pour étaler le parc.
+RandomizedDelaySec=2160
+# Rattrape une échéance manquée (machine éteinte) au démarrage suivant.
+# Le trou de collecte reste déclaré dans la couverture (§4.2) — le
+# rattrapage le referme plus vite, il ne le masque pas.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -26,6 +26,17 @@ pub fn resolve_store_path(flag: Option<PathBuf>) -> PathBuf {
 /// erreur explicite (et non un fichier vide créé en silence sur un chemin
 /// mal orthographié).
 pub fn open_store(path: &Path) -> miette::Result<Box<dyn Store>> {
+    Ok(Box::new(open_redb(path)?))
+}
+
+/// Ouvre le magasin sous son type concret [`RedbStore`].
+///
+/// Réservé aux commandes qui exigent plus que le trait `Store` : la purge de
+/// rétention (§16) a besoin de [`constat_store::PurgeableStore`] (suppression
+/// de blobs et snapshots) et de [`constat_store::MultiJournalStore`] (voir
+/// tous les journaux pour ne trouer la chaîne de personne). Le pouvoir
+/// d'écriture est porté par le type, pas par une option.
+pub fn open_redb(path: &Path) -> miette::Result<RedbStore> {
     if !path.exists() {
         return Err(miette!(
             help = "lancez d'abord une collecte (`constat-agent run --once`), ou \
@@ -34,7 +45,6 @@ pub fn open_store(path: &Path) -> miette::Result<Box<dyn Store>> {
             path.display()
         ));
     }
-    let store = RedbStore::open(path)
-        .map_err(|e| miette!("impossible d'ouvrir le magasin {} : {e}", path.display()))?;
-    Ok(Box::new(store))
+    RedbStore::open(path)
+        .map_err(|e| miette!("impossible d'ouvrir le magasin {} : {e}", path.display()))
 }

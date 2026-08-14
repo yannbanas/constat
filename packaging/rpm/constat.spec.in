@@ -1,0 +1,127 @@
+# Spec RPM de Constat — trois sous-paquets : constat-tools (CLI +
+# vérificateur), constat-agent, constat-server.
+#
+# Les binaires sont fournis DÉJÀ COMPILÉS (cargo build --release --locked,
+# voir packaging/build-packages.sh) dans le répertoire `_constat_staging`,
+# défini sur la ligne de commande rpmbuild. Ce spec ne compile rien : il
+# range — explicite, auditable, sans magie.
+
+# Binaires pré-compilés : pas de paquet debuginfo, pas de strip, pas de
+# vérification build-id — rpmbuild n'a rien construit lui-même.
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+%global _build_id_links none
+
+Name:           constat
+Version:        @VERSION@
+Release:        1
+Summary:        Constat — preuve d'état d'infrastructure dans le temps
+License:        Apache-2.0
+URL:            https://github.com/yannbanas/constat
+# L'architecture vient de `rpmbuild --target` (voir build-packages.sh).
+
+%description
+Constat collecte l'état d'un parc en lecture seule, le range dans un magasin
+adressé par contenu à journal signé, et produit des dossiers de preuve
+vérifiables sans l'outil. Paquet parapluie : installez constat-agent ou
+constat-server.
+
+%package tools
+Summary:        Constat — CLI d'interrogation et vérificateur autonome
+%description tools
+La CLI `constat` (interrogation, assertions, dossier de preuve, ancrage) et
+le vérificateur autonome `constat-verify`, qui contrôle un export sans faire
+confiance à Constat.
+
+%package agent
+Summary:        Constat — agent de collecte (lecture seule)
+Requires:       constat-tools = %{version}-%{release}
+%description agent
+L'agent de collecte Constat : lecture seule, aucun port en écoute, aucun
+code envoyé, expurgation des secrets à la source (§7.1). Collecte planifiée
+par systemd (timer non activé par défaut).
+
+%package server
+Summary:        Constat — serveur collecteur (réception mTLS)
+Requires:       constat-tools = %{version}-%{release}
+%description server
+Le serveur central Constat : réception mTLS, aucun chemin de retour vers le
+parc (§17). Le service ne démarre pas tant que /etc/constat/server.env ne
+fournit pas le mTLS complet.
+
+%prep
+# Rien : les binaires arrivent pré-compilés depuis %%{_constat_staging}.
+
+%build
+# Rien non plus — voir l'en-tête.
+
+%install
+install -D -m 0755 %{_constat_staging}/bin/constat            %{buildroot}%{_bindir}/constat
+install -D -m 0755 %{_constat_staging}/bin/constat-verify     %{buildroot}%{_bindir}/constat-verify
+install -D -m 0755 %{_constat_staging}/bin/constat-agent      %{buildroot}%{_bindir}/constat-agent
+install -D -m 0755 %{_constat_staging}/bin/constat-server     %{buildroot}%{_bindir}/constat-server
+install -D -m 0644 %{_constat_staging}/systemd/constat-agent.service  %{buildroot}/usr/lib/systemd/system/constat-agent.service
+install -D -m 0644 %{_constat_staging}/systemd/constat-agent.timer    %{buildroot}/usr/lib/systemd/system/constat-agent.timer
+install -D -m 0644 %{_constat_staging}/systemd/constat-server.service %{buildroot}/usr/lib/systemd/system/constat-server.service
+install -D -m 0640 %{_constat_staging}/etc/agent.env          %{buildroot}%{_sysconfdir}/constat/agent.env
+install -D -m 0640 %{_constat_staging}/etc/server.env         %{buildroot}%{_sysconfdir}/constat/server.env
+install -d -m 0750 %{buildroot}/var/lib/constat
+install -D -m 0644 %{_constat_staging}/LICENSE %{buildroot}%{_datadir}/licenses/constat/LICENSE
+install -D -m 0644 %{_constat_staging}/NOTICE  %{buildroot}%{_datadir}/licenses/constat/NOTICE
+
+%pre server
+getent group constat >/dev/null || groupadd --system constat
+getent passwd constat >/dev/null || useradd --system --gid constat \
+    --home-dir /var/lib/constat --no-create-home --shell /usr/sbin/nologin \
+    --comment "Serveur Constat" constat
+exit 0
+
+%post agent
+if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload >/dev/null 2>&1 || :; fi
+echo "constat-agent : collecte planifiée NON activée par défaut — systemctl enable --now constat-agent.timer"
+
+%post server
+# Le serveur écrit dans le magasin sous son utilisateur système.
+chown constat:constat /var/lib/constat || :
+if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload >/dev/null 2>&1 || :; fi
+echo "constat-server : service NON activé — renseignez /etc/constat/server.env (mTLS) puis systemctl enable --now constat-server.service"
+
+%preun agent
+if [ "$1" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now constat-agent.timer >/dev/null 2>&1 || :
+    systemctl stop constat-agent.service >/dev/null 2>&1 || :
+fi
+
+%preun server
+if [ "$1" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now constat-server.service >/dev/null 2>&1 || :
+fi
+
+%postun agent
+# /var/lib/constat est CONSERVÉ : c'est de la preuve — jamais détruite en silence.
+if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload >/dev/null 2>&1 || :; fi
+
+%postun server
+if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload >/dev/null 2>&1 || :; fi
+
+%files tools
+%license %{_datadir}/licenses/constat/LICENSE
+%license %{_datadir}/licenses/constat/NOTICE
+%{_bindir}/constat
+%{_bindir}/constat-verify
+
+%files agent
+%{_bindir}/constat-agent
+/usr/lib/systemd/system/constat-agent.service
+/usr/lib/systemd/system/constat-agent.timer
+%dir %attr(0750,root,root) /var/lib/constat
+%config(noreplace) %attr(0640,root,root) %{_sysconfdir}/constat/agent.env
+
+%files server
+%{_bindir}/constat-server
+/usr/lib/systemd/system/constat-server.service
+%dir %attr(0750,root,root) /var/lib/constat
+%config(noreplace) %attr(0640,root,root) %{_sysconfdir}/constat/server.env
+
+%changelog
+# Le journal des modifications vit dans CHANGELOG.md, à la racine du dépôt.

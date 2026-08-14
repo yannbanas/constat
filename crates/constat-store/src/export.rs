@@ -35,7 +35,13 @@
 //!   (entrée → snapshots → blobs) : l'export est exactement la clôture de la
 //!   preuve, rien d'autre ;
 //! - l'export est déterministe : deux magasins au même contenu produisent des
-//!   exports identiques à l'octet près.
+//!   exports identiques à l'octet près ;
+//! - un objet référencé mais **absent** du magasin est toléré si — et
+//!   seulement si — son empreinte figure dans le manifeste d'un
+//!   enregistrement de purge présent ([`crate::purge`], §16) : la clôture
+//!   exportée est alors « tout ce qui existe encore, plus la déclaration de
+//!   ce qui a été purgé », et `constat-verify` sait la lire (FORMAT.md,
+//!   § « Objets purgés »). Une absence NON déclarée reste une erreur.
 //!
 //! L'algorithme de vérification complet (7 étapes) est documenté dans
 //! `crates/constat-verify/FORMAT.md`.
@@ -78,7 +84,10 @@ fn write_object(dir: &Path, hex: &str, bytes: &[u8]) -> Result<(), StoreError> {
 ///
 /// L'export parcourt le journal et suit les références : entrées → snapshots
 /// → blobs. Un objet référencé mais absent du magasin fait échouer l'export
-/// ([`StoreError::NotFound`]) — un export partiel ne serait pas une preuve.
+/// ([`StoreError::NotFound`]) — un export partiel ne serait pas une preuve —
+/// **sauf** si son absence est déclarée par un enregistrement de purge
+/// présent ([`crate::declared_purged`]) : la purge journalisée (§16) est la
+/// seule absence honnête, et le vérificateur la contrôle.
 /// Un répertoire contenant déjà un export **plus long** (un fichier d'entrée
 /// au-delà de la dernière écrite) fait échouer l'export : un fichier
 /// résiduel casserait la vérification — exportez vers un répertoire propre.
@@ -130,6 +139,11 @@ fn export_entries<S: Store + ?Sized>(
 
     fs::write(dir.join(PUBKEY_FILE), public_key).map_err(|e| io_err(PUBKEY_FILE, e))?;
 
+    // Absences tolérées : les empreintes déclarées purgées par les
+    // enregistrements `constat.purge` atteignables depuis CE journal (§16).
+    // Tout autre objet manquant fait échouer l'export, comme avant.
+    let purged = crate::purge::declared_purged(store, entries)?;
+
     for (index, (_hash, entry)) in entries.iter().enumerate() {
         // Entrée complète, signature incluse : blake3(fichier) est l'empreinte
         // de chaînage que l'entrée suivante porte dans `prev`.
@@ -138,12 +152,22 @@ fn export_entries<S: Store + ?Sized>(
             .map_err(|e| io_err(&format!("entrée {index}"), e))?;
 
         for snapshot_hash in &entry.snapshots {
-            let snapshot = store.get_snapshot(snapshot_hash)?;
+            let snapshot = match store.get_snapshot(snapshot_hash) {
+                Ok(snapshot) => snapshot,
+                // Purgé ET déclaré : absence honnête, le vérificateur la
+                // contrôlera contre le manifeste. Rien à exporter.
+                Err(StoreError::NotFound(_)) if purged.contains(snapshot_hash) => continue,
+                Err(e) => return Err(e),
+            };
             let snapshot_bytes = to_canonical_bytes(&snapshot)?;
             write_object(&snapshots_dir, &snapshot_hash.to_hex(), &snapshot_bytes)?;
 
             for blob_hash in snapshot.blobs.values() {
-                let blob = store.get_blob(blob_hash)?;
+                let blob = match store.get_blob(blob_hash) {
+                    Ok(blob) => blob,
+                    Err(StoreError::NotFound(_)) if purged.contains(blob_hash) => continue,
+                    Err(e) => return Err(e),
+                };
                 let blob_bytes = to_canonical_bytes(&blob)?;
                 write_object(&blobs_dir, &blob_hash.to_hex(), &blob_bytes)?;
             }

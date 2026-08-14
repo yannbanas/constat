@@ -125,10 +125,21 @@ impl InstallOptions {
 
 /// Unité de service systemd : un `oneshot` qui exécute `run --once`.
 ///
-/// Le durcissement est mécanique, pas déclaratif : `ProtectSystem=strict`
-/// rend tout le système de fichiers en lecture seule pour le service, sauf
-/// le répertoire du magasin — la contrainte §7.1 (« lecture seule hors
-/// magasin et clés ») devient une propriété imposée par le noyau.
+/// Le durcissement est mécanique, pas déclaratif : chaque contrainte §7.1
+/// est imposée par le noyau (capacités bornées, système de fichiers en
+/// lecture seule hors magasin, filtre d'appels système), et chaque directive
+/// est **commentée dans l'unité générée** — l'administrateur doit comprendre
+/// ce qu'il déploie.
+///
+/// Le service démarre root (la collecte lit `/etc/shadow`, `sudoers`…), mais
+/// en mode `--once` le binaire abandonne lui-même ses privilèges après la
+/// collecte et avant toute connexion réseau ([`crate::privileges`]) : c'est
+/// pourquoi `CAP_SETGID`/`CAP_SETUID` restent dans le périmètre des
+/// capacités — sans eux, `setresuid` échouerait et la poussée serait
+/// refusée. Le mode continu `run --every`, lui, ne peut pas abandonner
+/// in-process (la collecte suivante relirait les fichiers protégés) : sa
+/// réduction vient uniquement de ce durcissement — raison de plus pour
+/// préférer le timer + `--once` installés ici.
 pub fn systemd_service(options: &InstallOptions) -> String {
     let exec = std::iter::once(options.exe.clone())
         .chain(options.agent_args())
@@ -139,6 +150,15 @@ pub fn systemd_service(options: &InstallOptions) -> String {
     let mut unit = format!(
         "# Généré par `constat-agent install`.\n\
          # Collecte Constat : lecture seule, aucun port en écoute, aucun code envoyé (§7.1).\n\
+         #\n\
+         # Le service démarre root : lire /etc/shadow ou sudoers l'exige. Ce que\n\
+         # « root » peut faire ici est borné par les directives commentées plus bas,\n\
+         # et le binaire abandonne lui-même ses privilèges (setgroups, setresgid,\n\
+         # setresuid vers `constat` ou `nobody`) après la collecte et AVANT toute\n\
+         # connexion réseau — c'est le mode --once planifié par le timer, recommandé\n\
+         # précisément pour cela. Le mode continu `run --every` ne peut pas\n\
+         # abandonner in-process (la collecte suivante relirait les fichiers\n\
+         # protégés) : il ne serait couvert que par le présent durcissement.\n\
          [Unit]\n\
          Description=Constat — collecte d'état (lecture seule)\n\
          Documentation=https://github.com/yannbanas/constat\n\
@@ -146,15 +166,55 @@ pub fn systemd_service(options: &InstallOptions) -> String {
          [Service]\n\
          Type=oneshot\n\
          ExecStart={exec}\n\
-         NoNewPrivileges=yes\n"
+         # Aucun gain de privilèges possible après le démarrage (bits setuid,\n\
+         # capacités de fichiers… sont sans effet pour ce processus).\n\
+         NoNewPrivileges=yes\n\
+         # Capacités strictement nécessaires, tout le reste est hors d'atteinte\n\
+         # (pas de mount, ptrace, module, raw-io…) :\n\
+         #  - CAP_DAC_READ_SEARCH : lire les fichiers protégés (la collecte) ;\n\
+         #  - CAP_SETGID, CAP_SETUID : permettre l'abandon de privilèges in-process\n\
+         #    (setgroups/setresgid/setresuid) avant la poussée réseau — les retirer\n\
+         #    ferait échouer l'abandon, donc refuser la poussée.\n\
+         CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID\n\
+         # Aucune capacité ambiante : rien n'est transmis d'office au processus.\n\
+         AmbientCapabilities=\n\
+         # Les bits setuid/setgid des fichiers sont ignorés et impossibles à poser.\n\
+         RestrictSUIDSGID=yes\n\
+         # Tout fichier créé (magasin, verrous) n'est lisible que par son\n\
+         # propriétaire.\n\
+         UMask=0077\n"
     );
     if let Some(store_dir) = parent_unix(&options.store) {
         unit.push_str(
-            "# Lecture seule imposée par le noyau : seul le répertoire du magasin est inscriptible.\n",
+            "# Système de fichiers en lecture seule pour le service — imposé par le\n\
+             # noyau, pas promis par le code : seul le répertoire du magasin s'écrit.\n",
         );
         unit.push_str("ProtectSystem=strict\n");
+        unit.push_str("# L'unique exception : le répertoire du magasin (et des clés).\n");
         unit.push_str(&format!("ReadWritePaths={}\n", unit_quote(store_dir)));
     }
+    unit.push_str(
+        "# Les répertoires personnels restent lisibles (collecte) mais inaltérables.\n\
+         ProtectHome=read-only\n\
+         # /tmp privé au service : rien de partagé avec les autres processus.\n\
+         PrivateTmp=yes\n\
+         # /proc/sys, /sys… en lecture seule : la collecte lit, n'écrit jamais.\n\
+         ProtectKernelTunables=yes\n\
+         # Hiérarchie des cgroups en lecture seule.\n\
+         ProtectControlGroups=yes\n\
+         # Familles de sockets autorisées : TCP v4/v6 (poussée mTLS sortante) et\n\
+         # Unix (journalisation systemd). Aucun socket brut, aucun netlink.\n\
+         RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\
+         # Appels système restreints au profil @system-service de systemd (qui\n\
+         # contient @setuid, nécessaire à l'abandon de privilèges) ; un appel hors\n\
+         # profil termine le processus.\n\
+         SystemCallFilter=@system-service\n\
+         # Personnalité d'exécution verrouillée (pas de changement d'ABI).\n\
+         LockPersonality=yes\n\
+         # Aucune page mémoire à la fois inscriptible et exécutable : l'agent est\n\
+         # du code compilé, il n'exécute jamais de code généré à l'exécution.\n\
+         MemoryDenyWriteExecute=yes\n",
+    );
     unit
 }
 
@@ -188,8 +248,18 @@ pub fn systemd_timer(options: &InstallOptions) -> String {
 /// XML d'une tâche planifiée Windows, à enregistrer par l'opérateur avec
 /// `schtasks /create /tn "Constat Agent" /xml <fichier>`.
 ///
-/// La tâche tourne sous `S-1-5-18` (SYSTEM) : les collecteurs lisent des
-/// configurations protégées. `StartBoundary` est une date passée fixe —
+/// La tâche tourne sous `S-1-5-18` (SYSTEM), et c'est dit honnêtement dans
+/// le fichier généré : les lectures qu'exige la collecte (SAM, stratégie de
+/// sécurité locale, GPO appliquées, ruches protégées du registre) sont
+/// refusées à un compte à faible privilège, et Windows n'offre pas
+/// d'équivalent de `CAP_DAC_READ_SEARCH` qui donnerait la lecture seule
+/// sans le reste — l'abandon in-process du monde Unix
+/// ([`crate::privileges`]) n'a pas de traduction ici. Ce qui borne SYSTEM
+/// est la nature de l'agent (aucun port en écoute, aucune exécution de code
+/// envoyé, lecture seule) plus les réglages de la tâche (une heure
+/// d'exécution au plus, jamais deux instances).
+///
+/// `StartBoundary` est une date passée fixe —
 /// avec une répétition indéfinie, seul l'intervalle compte, et la valeur
 /// constante rend le fichier reproductible (même entrée, mêmes octets).
 pub fn windows_task_xml(options: &InstallOptions) -> String {
@@ -206,7 +276,20 @@ pub fn windows_task_xml(options: &InstallOptions) -> String {
     );
     format!(
         r#"<?xml version="1.0"?>
-<!-- Généré par `constat-agent install` : collecte Constat, lecture seule (§7.1). -->
+<!-- Généré par `constat-agent install` : collecte Constat, lecture seule (§7.1).
+
+     Pourquoi SYSTEM (S-1-5-18), dit honnêtement : les lectures qu'exige la
+     collecte (SAM, stratégie de sécurité locale, GPO appliquées, ruches
+     protégées du registre) sont refusées à un compte à faible privilège, et
+     Windows n'offre pas d'équivalent de CAP_DAC_READ_SEARCH qui donnerait la
+     lecture seule sans le reste. SYSTEM reste borné par la nature de l'agent
+     et par les réglages ci-dessous :
+       * aucun port en écoute : poussée sortante mTLS uniquement ;
+       * aucune exécution de code envoyé : collecteurs compilés dans le binaire,
+         la réponse du serveur n'est jamais interprétée ;
+       * lecture seule hors magasin et clés, secrets expurgés avant émission ;
+       * une exécution limitée à une heure (ExecutionTimeLimit), jamais deux
+         instances simultanées (MultipleInstancesPolicy). -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Constat — collecte d'état (lecture seule, aucun port en écoute)</Description>
@@ -368,6 +451,70 @@ mod tests {
         assert!(!unit.contains("--push"));
     }
 
+    /// Le durcissement complet (§7.1) : chaque directive attendue est là,
+    /// exactement.
+    #[test]
+    fn service_systemd_durci() {
+        let unit = systemd_service(&options());
+        for directive in [
+            "NoNewPrivileges=yes",
+            "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID",
+            "AmbientCapabilities=",
+            "RestrictSUIDSGID=yes",
+            "UMask=0077",
+            "ProtectSystem=strict",
+            "ReadWritePaths=/var/lib/constat",
+            "ProtectHome=read-only",
+            "PrivateTmp=yes",
+            "ProtectKernelTunables=yes",
+            "ProtectControlGroups=yes",
+            "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+            "SystemCallFilter=@system-service",
+            "LockPersonality=yes",
+            "MemoryDenyWriteExecute=yes",
+        ] {
+            assert!(
+                unit.lines().any(|l| l == directive),
+                "directive manquante ou altérée : {directive}\n{unit}"
+            );
+        }
+        // AmbientCapabilities est bien VIDE (pas de capacité ambiante).
+        assert!(!unit.contains("AmbientCapabilities=CAP"));
+    }
+
+    /// Chaque directive de durcissement est précédée d'un commentaire :
+    /// l'administrateur doit comprendre ce qu'il déploie.
+    #[test]
+    fn service_systemd_directives_commentees() {
+        let unit = systemd_service(&options());
+        let lines: Vec<&str> = unit.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let est_directive = line.contains('=')
+                && !line.starts_with('#')
+                && !line.starts_with("Type=")
+                && !line.starts_with("ExecStart=")
+                && !line.starts_with("Description=")
+                && !line.starts_with("Documentation=");
+            if est_directive {
+                assert!(
+                    i > 0 && lines[i - 1].starts_with('#'),
+                    "directive sans commentaire au-dessus : {line}"
+                );
+            }
+        }
+    }
+
+    /// L'abandon in-process exige CAP_SETUID/CAP_SETGID : l'unité les
+    /// documente comme tels (les retirer casserait l'abandon, donc la
+    /// poussée).
+    #[test]
+    fn service_systemd_documente_l_abandon() {
+        let unit = systemd_service(&options());
+        assert!(unit.contains("abandonne lui-même ses privilèges"));
+        assert!(unit.contains("AVANT toute"));
+        assert!(unit.contains("`run --every` ne peut pas"));
+    }
+
     #[test]
     fn service_systemd_avec_poussee() {
         let unit = systemd_service(&options_avec_poussee());
@@ -404,6 +551,31 @@ mod tests {
         // SYSTEM : les collecteurs lisent des configurations protégées.
         assert!(xml.contains("<UserId>S-1-5-18</UserId>"));
         assert!(xml.contains("<StopAtDurationEnd>false</StopAtDurationEnd>"));
+    }
+
+    /// La tâche Windows documente honnêtement pourquoi SYSTEM est requis et
+    /// ce qui le borne — dans le fichier même que l'opérateur enregistre.
+    #[test]
+    fn tache_windows_documente_system() {
+        let xml = windows_task_xml(&options());
+        assert!(xml.contains("Pourquoi SYSTEM"));
+        assert!(xml.contains("CAP_DAC_READ_SEARCH"));
+        assert!(xml.contains("aucun port en écoute"));
+        assert!(xml.contains("aucune exécution de code envoyé"));
+        // Bornes mécaniques citées ET présentes dans les réglages.
+        assert!(xml.contains("<ExecutionTimeLimit>PT1H</ExecutionTimeLimit>"));
+        assert!(xml.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
+        // Un commentaire XML ne doit jamais contenir « -- » : le fichier
+        // deviendrait invalide pour schtasks.
+        let comment = xml
+            .split("<!--")
+            .nth(1)
+            .and_then(|s| s.split("-->").next())
+            .unwrap();
+        assert!(
+            !comment.contains("--"),
+            "« -- » interdit en commentaire XML"
+        );
     }
 
     #[test]

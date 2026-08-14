@@ -23,11 +23,19 @@
 //! 3. vérifie la signature Ed25519 de chaque entrée : la signature porte sur
 //!    l'encodage canonique de l'entrée **avec le champ `signature` vidé** ;
 //! 4. vérifie que chaque snapshot référencé par une entrée, et chaque blob
-//!    référencé par un snapshot, est présent dans l'export.
+//!    référencé par un snapshot, est présent dans l'export — **ou que son
+//!    absence est déclarée** par un enregistrement de purge (§16) : un blob du
+//!    collecteur réservé `constat.purge`, présent dans l'export, **postérieur**
+//!    dans la chaîne à la référence manquante, dont le manifeste (vérifié)
+//!    contient l'empreinte absente. Un objet manquant NON déclaré reste une
+//!    erreur d'altération — c'est toute la valeur de la purge journalisée :
+//!    un trou déclaré et un effacement malveillant deviennent distinguables.
 //!
 //! Le résultat est structuré : [`VerifiedExport`] avec la racine (empreinte de
-//! la dernière entrée) en cas de succès, ou [`VerifyError`] désignant
-//! précisément l'entrée et la vérification qui a échoué.
+//! la dernière entrée), le nombre d'objets purgés déclarés ([`VerifiedExport::purged_count`])
+//! et les déclarations de purge ([`PurgeSummary`]) en cas de succès, ou
+//! [`VerifyError`] désignant précisément l'entrée et la vérification qui a
+//! échoué.
 //!
 //! ## Ce que la vérification n'établit PAS (§6.2)
 //!
@@ -53,10 +61,13 @@
 //!     └── <hex>.cbor      # un blob par fichier, nommé par son empreinte
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use constat_model::{hash_canonical, to_canonical_bytes, Blob, BlobHash, CollectorId, Snapshot};
+use constat_model::{
+    hash_canonical, to_canonical_bytes, Blob, BlobHash, CollectorId, Snapshot, Timestamp,
+};
+use constat_store::purge::{parse_purge_blob, PURGE_COLLECTOR};
 use constat_store::JournalEntry;
 use ed25519_dalek::{Signature, VerifyingKey};
 
@@ -78,8 +89,24 @@ pub struct Export {
     pub public_key: [u8; 32],
 }
 
+/// Une déclaration de purge relevée dans l'export (§16) : le résumé d'un blob
+/// `constat.purge` valide — période, motif, compte, manifeste.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PurgeSummary {
+    /// Début de la période purgée.
+    pub from: Timestamp,
+    /// Fin de la période purgée.
+    pub to: Timestamp,
+    /// Motif déclaré.
+    pub reason: String,
+    /// Nombre d'objets que la déclaration couvre.
+    pub objects: u64,
+    /// Empreinte du manifeste (BLAKE3 de la liste canonique), revérifiée.
+    pub manifest: BlobHash,
+}
+
 /// Résultat d'une vérification réussie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedExport {
     /// La racine : empreinte de la dernière entrée du journal, signature
     /// incluse. C'est cette valeur qu'il faut comparer à une racine ancrée
@@ -91,6 +118,13 @@ pub struct VerifiedExport {
     pub snapshot_count: usize,
     /// Nombre de blobs fournis (tous vérifiés contre leur empreinte).
     pub blob_count: usize,
+    /// Nombre d'objets référencés mais absents dont l'absence est **déclarée**
+    /// par une purge journalisée postérieure (§16). Zéro sur un export sans
+    /// purge — les exports antérieurs au format restent valides tels quels.
+    pub purged_count: usize,
+    /// Les déclarations de purge relevées dans l'export, dans l'ordre de la
+    /// chaîne (période, motif, compte, manifeste).
+    pub purges: Vec<PurgeSummary>,
 }
 
 /// Échec de vérification : désigne précisément l'objet et la vérification en
@@ -142,6 +176,11 @@ pub enum VerifyError {
         annonce: BlobHash,
         calcule: BlobHash,
     },
+    /// Un blob du collecteur réservé `constat.purge` est malformé ou
+    /// intérieurement incohérent (compte, manifeste, période) : la
+    /// déclaration ne couvre **aucune** absence, et l'export est refusé
+    /// plutôt que vérifié sur une tolérance illisible.
+    DeclarationPurgeInvalide { blob: BlobHash, detail: String },
 }
 
 impl fmt::Display for VerifyError {
@@ -210,6 +249,11 @@ impl fmt::Display for VerifyError {
                 annonce.to_hex(),
                 calcule.to_hex()
             ),
+            VerifyError::DeclarationPurgeInvalide { blob, detail } => write!(
+                f,
+                "déclaration de purge invalide (blob {}) : {detail}",
+                blob.to_hex()
+            ),
         }
     }
 }
@@ -265,6 +309,53 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
         }
     }
 
+    // Étape 2 bis — relever les déclarations de purge (§16) : blobs du
+    // collecteur réservé `constat.purge`, atteints par entrée → snapshot →
+    // blob. Chaque déclaration est revérifiée (compte, manifeste BLAKE3 de la
+    // liste canonique) ; on retient, pour chaque empreinte déclarée purgée,
+    // l'index de la PREMIÈRE entrée qui porte la déclaration — une absence ne
+    // sera tolérée que si la déclaration lui est postérieure dans la chaîne.
+    let purge_collector = CollectorId(PURGE_COLLECTOR.to_string());
+    let mut declared: BTreeMap<BlobHash, usize> = BTreeMap::new();
+    let mut purges: Vec<PurgeSummary> = Vec::new();
+    let mut seen_declarations: BTreeSet<BlobHash> = BTreeSet::new();
+    for (index, entry) in export.entries.iter().enumerate() {
+        for snapshot_hash in &entry.snapshots {
+            let Some(snapshot) = export.snapshots.get(snapshot_hash) else {
+                continue; // absence traitée à l'étape 3c
+            };
+            let Some(blob_hash) = snapshot.blobs.get(&purge_collector) else {
+                continue;
+            };
+            let Some(blob) = export.blobs.get(blob_hash) else {
+                continue; // absence traitée à l'étape 3c
+            };
+            let declaration =
+                parse_purge_blob(blob).map_err(|e| VerifyError::DeclarationPurgeInvalide {
+                    blob: *blob_hash,
+                    detail: e.to_string(),
+                })?;
+            for hash in &declaration.purged {
+                declared.entry(*hash).or_insert(index);
+            }
+            if seen_declarations.insert(*blob_hash) {
+                purges.push(PurgeSummary {
+                    from: declaration.from,
+                    to: declaration.to,
+                    reason: declaration.reason,
+                    objects: declaration.objects,
+                    manifest: declaration.manifest,
+                });
+            }
+        }
+    }
+    // Une absence à l'entrée `i` n'est tolérée que si sa déclaration vit à
+    // une entrée STRICTEMENT postérieure : la purge suit toujours la donnée.
+    let declared_after = |hash: &BlobHash, index: usize| -> bool {
+        declared.get(hash).is_some_and(|decl| *decl > index)
+    };
+    let mut purged_missing: BTreeSet<BlobHash> = BTreeSet::new();
+
     // Étape 3 — chaînage, signatures, références, de la genèse à la racine.
     let mut prev: Option<BlobHash> = None;
     for (index, entry) in export.entries.iter().enumerate() {
@@ -303,14 +394,25 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
             .map_err(|_| VerifyError::SignatureInvalide { index })?;
 
         // 3c. Chaque snapshot référencé est présent, et chaque blob qu'il
-        // référence l'est aussi (leur intégrité a été vérifiée aux étapes 1-2).
+        // référence l'est aussi (leur intégrité a été vérifiée aux étapes
+        // 1-2) — à l'unique exception d'une absence DÉCLARÉE par une purge
+        // journalisée postérieure (étape 2 bis). Tout autre manque est une
+        // altération.
         for hash in &entry.snapshots {
-            let snapshot = export
-                .snapshots
-                .get(hash)
-                .ok_or(VerifyError::SnapshotManquant { index, hash: *hash })?;
+            let snapshot = match export.snapshots.get(hash) {
+                Some(snapshot) => snapshot,
+                None if declared_after(hash, index) => {
+                    purged_missing.insert(*hash);
+                    continue;
+                }
+                None => return Err(VerifyError::SnapshotManquant { index, hash: *hash }),
+            };
             for (collecteur, blob_hash) in &snapshot.blobs {
                 if !export.blobs.contains_key(blob_hash) {
+                    if declared_after(blob_hash, index) {
+                        purged_missing.insert(*blob_hash);
+                        continue;
+                    }
                     return Err(VerifyError::BlobManquant {
                         snapshot: *hash,
                         collecteur: collecteur.clone(),
@@ -331,6 +433,8 @@ pub fn verify_export(export: &Export) -> Result<VerifiedExport, VerifyError> {
             entry_count: export.entries.len(),
             snapshot_count: export.snapshots.len(),
             blob_count: export.blobs.len(),
+            purged_count: purged_missing.len(),
+            purges,
         }),
         // Impossible : entries est non vide, la boucle a affecté `prev`.
         None => Err(VerifyError::ExportVide),

@@ -7,6 +7,87 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Ajouté
+
+- **Purge de rétention journalisée** (§16, bloquant de production) — un trou
+  non déclaré est indistinguable d'un effacement malveillant ; la purge
+  déclare donc **qu'elle a eu lieu**, sur quelle période et pour quel motif,
+  sans réécrire la chaîne. Tout est additif : les magasins et exports v0.3.0
+  restent valides tels quels.
+  - **Magasin** (`constat-store`) : module `purge` — l'enregistrement de
+    purge est un constat ordinaire (blob du collecteur réservé
+    `constat.purge` : document brut lisible avec la liste complète des
+    empreintes purgées, faits `purge.from`/`purge.to`/`purge.reason`/
+    `purge.objects`/`purge.manifest` — BLAKE3 de la liste canonique),
+    référencé par une **nouvelle entrée signée**. `plan_purge` (lecture
+    seule) et `purge_older_than`/`execute_plan` : déclaration écrite AVANT
+    la suppression, blobs dédupliqués encore référencés conservés, clôtures
+    des journaux nommés intouchées, rejeu idempotent (rien à purger → rien
+    d'écrit). Nouveau sous-trait `PurgeableStore` (`delete_blob`,
+    `delete_snapshot` — jamais les entrées de journal) implémenté par les
+    deux backends, et `Store::has_snapshot` (défaut fourni).
+  - **Export** : un objet référencé mais absent est toléré si son empreinte
+    figure dans un manifeste de purge présent ; toute autre absence échoue
+    comme avant.
+  - **Vérificateur** (`constat-verify`) : une absence est acceptée si — et
+    seulement si — elle est déclarée par une purge **postérieure** dans la
+    chaîne, au manifeste revérifié ; sortie « cohérent — N objet(s) purgé(s)
+    déclaré(s) (période, motif) », nouveaux champs `purged_count` et
+    `purges` du résultat, nouvelle erreur `DeclarationPurgeInvalide`. Un
+    objet manquant non déclaré reste une erreur d'altération. FORMAT.md :
+    nouvelle section normative « Objets purgés » (algorithme exact, note de
+    version : les exports pré-purge restent valides).
+  - **CLI** : `constat purge --older-than <durée> --reason <motif>
+    [--keys <dossier>] [--dry-run] [--yes]` — récapitulatif puis
+    confirmation interactive (une purge est irréversible), deuxième commande
+    d'écriture de la CLI après `segmentation --record`, documentée comme
+    telle dans l'aide ; `constat retention --show|--check <durée>` (lecture
+    seule : âge des données, purges déjà déclarées, simulation).
+  - **Couverture** : les périodes purgées apparaissent comme des trous
+    `RetentionPurge` dans `constat history` et `constat check` — déclarés,
+    jamais masqués en `Unknown`.
+  - **Docs RGPD** : `docs/rgpd/registre-de-traitement.md` (modèle art. 30
+    prêt à verser au dossier du client, rétention par défaut 3 ans alignée
+    sur l'audit) et `docs/rgpd/purge.md` (fonctionnement, garanties, et ce
+    que la purge ne fait pas).
+- **Paquets Linux (.deb + .rpm)** : `packaging/build-packages.sh` assemble
+  trois paquets (`constat-tools` : CLI + vérificateur ; `constat-agent` et
+  `constat-server`, qui en dépendent — aucun binaire dupliqué, agent et
+  serveur co-installables) avec `dpkg-deb` et `rpmbuild` à partir de
+  squelettes versionnés dans `packaging/` — explicite, auditable, sans
+  générateur opaque. Unités systemd livrées (timer de collecte 6 h, service
+  serveur sous utilisateur système `constat`), conffiles
+  `/etc/constat/*.env`, `/var/lib/constat` en 0750, **rien d'activé
+  automatiquement** et magasin **conservé à la désinstallation** (c'est de
+  la preuve). Job de release `paquets-linux` : x86_64 et aarch64 (natif sur
+  runner ARM), empreintes SHA-256 jointes.
+- **Provenance SLSA et SBOM des artefacts** (§17) : chaque archive, paquet
+  et SBOM de release est attesté par `actions/attest-build-provenance`
+  (signature Sigstore liant l'artefact au commit et au workflow —
+  vérifiable par `gh attestation verify … --repo yannbanas/constat`) ;
+  nomenclature SPDX générée par syft depuis les sources au tag exact
+  (`Cargo.lock`, compilation `--locked`), attachée à la release avec son
+  empreinte.
+- **Supervision du serveur** : `constat-server status` — par journal/agent :
+  dernière entrée, âge, nombre d'entrées, racine. `--max-age <durée>` :
+  code de sortie 1 si un journal est en retard (check cron/Nagios) ;
+  `--expected <fichier>` (clé publique hex + nom optionnel par ligne) :
+  journaux attendus absents et journaux inattendus signalés — l'écart
+  d'inventaire est un constat (§10.2) ; `--format prometheus` : métriques
+  textfile (`constat_agent_last_entry_timestamp_seconds`,
+  `constat_agent_entries_total`, `constat_agent_stale`,
+  `constat_store_size_bytes`, compteurs d'écart) pour le textfile collector
+  de node_exporter. **Aucun port ni endpoint nouveau** : la supervision est
+  un binaire qu'on lance, pas une surface d'attaque (§17).
+- **Guide d'exploitation** (`docs/exploitation.md`) : installation par
+  paquets, vérification des empreintes/attestations/SBOM, sauvegarde du
+  magasin (export normatif recommandé — vérifiable —, copie à froid en
+  alternative), restauration, supervision (cron + Prometheus), journaux
+  applicatifs via journald, mise à jour, désinstallation, et la liste
+  honnête de ce qui n'est pas encore automatisé (MSI/winget Windows,
+  sauvegarde à chaud, réimportation d'export, dépôt apt/yum, reproduction
+  indépendante du build).
+
 ## [0.3.0] — 2026-08-13
 
 ### Ajouté

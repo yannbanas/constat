@@ -1,0 +1,21 @@
+#!/bin/sh
+# postrm du paquet constat-server.
+#
+# Le magasin central (/var/lib/constat) est CONSERVÉ, même en purge :
+# c'est l'historique de preuve de tout un parc. Un paquet ne détruit pas de
+# la preuve en silence. L'utilisateur système `constat` est lui aussi
+# conservé : il possède ces fichiers.
+set -e
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+case "$1" in
+    purge)
+        echo "constat-server : /var/lib/constat (magasin central) et l'utilisateur système 'constat' sont conservés volontairement — c'est de la preuve." >&2
+        echo "Pour tout supprimer : rm -r /var/lib/constat && userdel constat (après export si nécessaire)." >&2
+        ;;
+esac
+
+exit 0

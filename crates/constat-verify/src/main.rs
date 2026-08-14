@@ -119,8 +119,32 @@ fn run(dir: &Path) -> Result<String, String> {
 
     let ok = verify_export(&export).map_err(|e| e.to_string())?;
 
+    // Purges journalisées (§16) : des objets absents mais DÉCLARÉS ne sont
+    // pas une altération — le résultat le dit explicitement, période et
+    // motif compris. Un export sans purge garde la sortie historique.
+    let purge_note = if ok.purged_count == 0 && ok.purges.is_empty() {
+        String::new()
+    } else {
+        let mut note = format!(
+            "cohérent — {} objet(s) purgé(s) déclaré(s) :\n",
+            ok.purged_count
+        );
+        for p in &ok.purges {
+            note.push_str(&format!(
+                "  - période {} → {}, motif « {} », {} objet(s), manifeste {}\n",
+                date(p.from),
+                date(p.to),
+                p.reason,
+                p.objects,
+                p.manifest.to_hex()
+            ));
+        }
+        note
+    };
+
     Ok(format!(
         "OK — export vérifié : chaîne intacte, signatures valides, artefacts conformes.\n\
+         {purge_note}\
          Racine    : {}\n\
          Entrées   : {}\n\
          Snapshots : {}\n\
@@ -133,6 +157,12 @@ fn run(dir: &Path) -> Result<String, String> {
         ok.snapshot_count,
         ok.blob_count
     ))
+}
+
+/// Date lisible (RFC 3339) pour la sortie ; millisecondes brutes si la valeur
+/// sort de l'intervalle représentable.
+fn date(t: constat_model::Timestamp) -> String {
+    t.to_rfc3339().unwrap_or_else(|_| format!("{} ms", t.0))
 }
 
 /// Lit un répertoire d'objets adressés par contenu : chaque fichier doit se

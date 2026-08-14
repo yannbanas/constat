@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use constat_model::{hash_canonical, Blob, BlobHash, Snapshot};
 
 use crate::journal::check_journal_signature;
-use crate::{JournalEntry, JournalId, MultiJournalStore, Store, StoreError};
+use crate::{JournalEntry, JournalId, MultiJournalStore, PurgeableStore, Store, StoreError};
 
 /// Magasin en mémoire, adressé par contenu.
 ///
@@ -98,6 +98,10 @@ impl Store for MemoryStore {
             .ok_or_else(|| StoreError::NotFound(format!("snapshot {}", hash.to_hex())))
     }
 
+    fn has_snapshot(&self, hash: &BlobHash) -> Result<bool, StoreError> {
+        Ok(self.snapshots.contains_key(hash))
+    }
+
     fn append_entry(&mut self, entry: &JournalEntry) -> Result<BlobHash, StoreError> {
         let last = self.journal.last().map(|(hash, _)| *hash);
         if entry.prev != last {
@@ -172,5 +176,15 @@ impl MultiJournalStore for MemoryStore {
 
     fn journals(&self) -> Result<Vec<JournalId>, StoreError> {
         Ok(self.named.keys().copied().collect())
+    }
+}
+
+impl PurgeableStore for MemoryStore {
+    fn delete_blob(&mut self, hash: &BlobHash) -> Result<bool, StoreError> {
+        Ok(self.blobs.remove(hash).is_some())
+    }
+
+    fn delete_snapshot(&mut self, hash: &BlobHash) -> Result<bool, StoreError> {
+        Ok(self.snapshots.remove(hash).is_some())
     }
 }

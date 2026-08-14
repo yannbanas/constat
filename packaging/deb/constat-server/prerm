@@ -1,0 +1,13 @@
+#!/bin/sh
+# prerm du paquet constat-server : arrêt propre du service.
+set -e
+
+case "$1" in
+    remove)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl disable --now constat-server.service >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,21 @@
+# Unité livrée par le paquet constat-agent.
+#
+# C'est la sortie de `constat-agent install --print` avec les chemins du
+# paquet (/usr/bin, /var/lib/constat), plus un fichier d'environnement
+# optionnel pour les options locales (poussée mTLS, notamment) — voir
+# /etc/constat/agent.env.
+#
+# Collecte Constat : lecture seule, aucun port en écoute, aucun code envoyé (§7.1).
+[Unit]
+Description=Constat — collecte d'état (lecture seule)
+Documentation=https://github.com/yannbanas/constat
+
+[Service]
+Type=oneshot
+# Options locales (ex. CONSTAT_AGENT_OPTS="--push --server https://… --cert … --key … --ca …").
+EnvironmentFile=-/etc/constat/agent.env
+ExecStart=/usr/bin/constat-agent run --once --store /var/lib/constat/constat.redb --keys /var/lib/constat/agent.keys $CONSTAT_AGENT_OPTS
+NoNewPrivileges=yes
+# Lecture seule imposée par le noyau : seul le répertoire du magasin est inscriptible.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/constat

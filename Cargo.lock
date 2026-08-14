@@ -406,6 +406,7 @@ dependencies = [
  "constat-model",
  "constat-store",
  "hex",
+ "libc",
  "miette",
  "rustls",
  "rustls-pki-types",

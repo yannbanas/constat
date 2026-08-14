@@ -27,9 +27,22 @@ use constat_policy::{
     evaluate_with, Assertion, AssetSelector, Evaluation, EvaluationInput, EvaluationOptions,
     PolicyError, TimedFact, Verdict,
 };
-use constat_time::{CoverageReport, Period, TimeError};
+use constat_time::{CoverageReport, Gap, Period, TimeError};
 
 use crate::queries::Observation;
+
+/// Construit une entrée d'évaluation par machine observée.
+///
+/// Équivalent de [`build_inputs_with_gaps`] sans interruption déclarée —
+/// conservé tel quel pour les appelants existants.
+pub fn build_inputs(
+    obs: &[Observation],
+    snapshot_times: &[(AssetId, Timestamp)],
+    period: Period,
+    threshold: DurationMs,
+) -> Result<Vec<EvaluationInput>, TimeError> {
+    build_inputs_with_gaps(obs, snapshot_times, &[], period, threshold)
+}
 
 /// Construit une entrée d'évaluation par machine observée.
 ///
@@ -37,10 +50,13 @@ use crate::queries::Observation;
 /// par valeur consécutive identique d'un couple (entité, attribut), avec ses
 /// dates de première et dernière observation et l'empreinte du blob de
 /// preuve de la dernière. La couverture de chaque machine est calculée sur
-/// ses propres dates de collecte.
-pub fn build_inputs(
+/// ses propres dates de collecte, avec les interruptions déclarées
+/// (aujourd'hui : les purges de rétention, [`crate::queries::purge_gaps`]) —
+/// une période purgée pèse comme un trou `RetentionPurge` sur chaque machine.
+pub fn build_inputs_with_gaps(
     obs: &[Observation],
     snapshot_times: &[(AssetId, Timestamp)],
+    declared_gaps: &[Gap],
     period: Period,
     threshold: DurationMs,
 ) -> Result<Vec<EvaluationInput>, TimeError> {
@@ -97,7 +113,8 @@ pub fn build_inputs(
 
     let mut inputs = Vec::new();
     for (asset, times) in times_by_asset {
-        let coverage = crate::coverage::coverage_report(&times, period, threshold)?;
+        let coverage =
+            crate::coverage::coverage_report_declared(&times, declared_gaps, period, threshold)?;
         let facts = facts_by_asset.remove(&asset).unwrap_or_default();
         inputs.push(EvaluationInput::new(asset, facts, coverage));
     }

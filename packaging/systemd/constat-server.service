@@ -1,0 +1,32 @@
+# Unité livrée par le paquet constat-server.
+#
+# Le serveur refuse de démarrer sans mTLS complet (certificat, clé, autorité
+# des agents) : renseignez /etc/constat/server.env avant d'activer l'unité —
+# c'est volontaire, un dépôt de données sensibles ne s'essaie pas en clair.
+#
+# Aucun chemin de retour vers le parc (§17) : ce service reçoit, il n'agit
+# jamais sur les machines auditées.
+[Unit]
+Description=Constat — serveur collecteur (réception mTLS, aucun chemin de retour)
+Documentation=https://github.com/yannbanas/constat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=constat
+Group=constat
+# Obligatoire : CONSTAT_SERVER_OPTS doit fournir --cert, --key, --client-ca.
+EnvironmentFile=/etc/constat/server.env
+ExecStart=/usr/bin/constat-server run --store /var/lib/constat/constat.redb $CONSTAT_SERVER_OPTS
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+# Lecture seule imposée par le noyau : seul le répertoire du magasin est inscriptible.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/constat
+
+[Install]
+WantedBy=multi-user.target

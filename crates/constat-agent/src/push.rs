@@ -204,15 +204,37 @@ pub fn build_batch(
 
 /// Pousse un lot vers le serveur, en mTLS sortant uniquement.
 ///
+/// Charge le matériel TLS depuis les fichiers de [`PushConfig`] puis délègue
+/// à [`push_with_tls`]. Quand l'agent doit abandonner ses privilèges avant
+/// la phase réseau (§7.1, mode `--once` démarré root), l'appelant utilise
+/// plutôt [`load_tls_config`] **avant** l'abandon, puis [`push_with_tls`]
+/// après — voir [`crate::privileges`].
+pub fn push(config: &PushConfig, batch: &PushBatch) -> Result<(), PushError> {
+    let tls = load_tls_config(config)?;
+    push_with_tls(config, tls, batch)
+}
+
+/// Pousse un lot avec un matériel TLS déjà chargé : **aucun fichier n'est
+/// lu ici**, seule l'URL de [`PushConfig`] est utilisée.
+///
+/// C'est la moitié « réseau » de [`push`], séparée pour l'abandon de
+/// privilèges (§7.1) : l'agent charge certificats et clé en mémoire tant
+/// qu'il est root ([`load_tls_config`]), abandonne ses privilèges, puis
+/// appelle cette fonction en tant qu'utilisateur cible — les fichiers PEM
+/// peuvent donc rester lisibles par root seul (0600).
+///
 /// Ouvre une connexion TCP sortante, négocie le mTLS (certificat client
 /// présenté, serveur vérifié contre l'autorité de [`PushConfig::server_ca`]),
 /// écrit une requête `POST /v1/pousse` HTTP/1.1 et lit le **statut** de la
 /// réponse — rien d'autre : le corps de l'accusé n'est jamais interprété
 /// (§7.1, aucune exécution de code envoyé).
-pub fn push(config: &PushConfig, batch: &PushBatch) -> Result<(), PushError> {
+pub fn push_with_tls(
+    config: &PushConfig,
+    tls: Arc<rustls::ClientConfig>,
+    batch: &PushBatch,
+) -> Result<(), PushError> {
     let (host, port, path) = parse_server_url(&config.server_url)?;
     let body = to_canonical_bytes(batch)?;
-    let tls = client_tls_config(config)?;
 
     let server_name = ServerName::try_from(host.clone())
         .map_err(|e| PushError::InvalidUrl(format!("nom de serveur « {host} » : {e}")))?;
@@ -301,9 +323,14 @@ fn parse_status_line(bytes: &[u8]) -> Result<u16, PushError> {
 /// Construit la configuration TLS cliente : autorité du serveur comme seule
 /// racine de confiance, certificat client présenté d'office (mTLS).
 ///
+/// **Seule fonction de la poussée qui lit des fichiers** (certificat, clé,
+/// autorité). Publique et séparée de [`push_with_tls`] pour l'abandon de
+/// privilèges (§7.1) : appelée avant l'abandon, elle laisse la clé cliente
+/// lisible par root seul — rien n'est relu ensuite.
+///
 /// Le fournisseur cryptographique (`ring`) est fixé explicitement : le
 /// comportement ne dépend pas des features activées ailleurs dans l'arbre.
-fn client_tls_config(config: &PushConfig) -> Result<Arc<rustls::ClientConfig>, PushError> {
+pub fn load_tls_config(config: &PushConfig) -> Result<Arc<rustls::ClientConfig>, PushError> {
     let mut roots = rustls::RootCertStore::empty();
     for cert in read_certs(&config.server_ca)? {
         roots.add(cert)?;

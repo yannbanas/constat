@@ -19,9 +19,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use constat_server::receive::AgentPolicy;
-use constat_server::{inventory, serve};
+use constat_server::{inventory, monitor, serve};
 use constat_store::RedbStore;
 use miette::miette;
 
@@ -75,6 +75,40 @@ enum Command {
         #[arg(long, value_name = "CHEMIN")]
         store: Option<PathBuf>,
     },
+    /// Supervision : par journal/agent, dernière entrée, âge, entrées,
+    /// racine. Code de sortie 1 si un journal dépasse --max-age ou si
+    /// l'inventaire s'écarte de --expected — utilisable tel quel en check
+    /// cron/Nagios. Aucun port, aucun endpoint : la supervision est un
+    /// binaire qu'on lance, pas une surface d'attaque (§17). Lecture seule.
+    Status {
+        /// Chemin du magasin central (sinon CONSTAT_STORE, sinon ./constat.redb)
+        #[arg(long, value_name = "CHEMIN")]
+        store: Option<PathBuf>,
+        /// Âge maximal toléré de la dernière entrée de chaque journal
+        /// (ex. 90s, 30min, 6h, 7j). Dépassé : code de sortie 1.
+        #[arg(long, value_name = "DURÉE")]
+        max_age: Option<String>,
+        /// Format de sortie : `text` (lisible) ou `prometheus` (métriques
+        /// textfile pour le textfile collector de node_exporter).
+        #[arg(long, value_enum, default_value_t = StatusFormat::Text)]
+        format: StatusFormat,
+        /// Inventaire attendu : un fichier texte, une entrée par ligne —
+        /// `<clé publique hex 64 caractères> [nom]` ou `default [nom]`,
+        /// commentaires avec #. Les journaux attendus absents et les
+        /// journaux inattendus sont signalés : l'écart est un constat
+        /// (§10.2) — code de sortie 1.
+        #[arg(long, value_name = "FICHIER")]
+        expected: Option<PathBuf>,
+    },
+}
+
+/// Format de sortie de `constat-server status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum StatusFormat {
+    /// Texte lisible, une ligne par journal.
+    Text,
+    /// Métriques textfile Prometheus (node_exporter textfile collector).
+    Prometheus,
 }
 
 /// Résout le chemin du magasin : `--store`, sinon `CONSTAT_STORE`, sinon
@@ -193,5 +227,61 @@ fn main() -> miette::Result<()> {
             print!("{}", inventory::render(&rows));
             Ok(())
         }
+        Command::Status {
+            store,
+            max_age,
+            format,
+            expected,
+        } => cmd_status(store, max_age, format, expected),
     }
+}
+
+/// `constat-server status` : calcule le rapport de supervision et sort avec
+/// le code 1 si quelque chose alerte (retard ou écart d'inventaire) — le
+/// texte explique, le code de sortie décide.
+fn cmd_status(
+    store: Option<PathBuf>,
+    max_age: Option<String>,
+    format: StatusFormat,
+    expected: Option<PathBuf>,
+) -> miette::Result<()> {
+    let max_age = max_age.as_deref().map(monitor::parse_max_age).transpose()?;
+    let expected = expected
+        .map(|path| -> miette::Result<Vec<monitor::ExpectedEntry>> {
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| miette!("fichier --expected illisible : {} : {e}", path.display()))?;
+            Ok(monitor::parse_expected(&content)?)
+        })
+        .transpose()?;
+
+    let path = resolve_store_path(store);
+    // Taille du fichier du magasin — pour `constat_store_size_bytes`.
+    // `None` (et non une erreur) si le fichier n'est pas mesurable.
+    let store_size = std::fs::metadata(&path).ok().map(|m| m.len());
+    let store = RedbStore::open(&path)
+        .map_err(|e| miette!("impossible d'ouvrir le magasin {} : {e}", path.display()))?;
+
+    // L'horloge n'entre qu'ici : tout le calcul en aval est testable à date fixe.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| constat_model::Timestamp(d.as_millis() as i64))
+        .unwrap_or(constat_model::Timestamp::UNIX_EPOCH);
+
+    let report = monitor::compute(&store, now, max_age, expected.as_deref(), store_size)
+        .map_err(|e| miette!("lecture des journaux de {} : {e}", path.display()))?;
+
+    match format {
+        StatusFormat::Text => print!(
+            "{}",
+            monitor::render_text(&report, &path.display().to_string())
+        ),
+        StatusFormat::Prometheus => print!("{}", monitor::render_prometheus(&report)),
+    }
+
+    if report.alert() {
+        // Convention des checks (cron, Nagios) : 1 = alerte. La sortie est
+        // déjà écrite et expliquée ; le code de sortie porte le verdict.
+        std::process::exit(1);
+    }
+    Ok(())
 }

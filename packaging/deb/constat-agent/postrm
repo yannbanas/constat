@@ -1,0 +1,21 @@
+#!/bin/sh
+# postrm du paquet constat-agent.
+#
+# Le magasin (/var/lib/constat) est CONSERVÉ, même en purge : c'est de la
+# preuve — un journal signé, potentiellement ancré. Un paquet ne détruit
+# pas de la preuve en silence ; sa suppression est une décision explicite
+# de l'opérateur.
+set -e
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+case "$1" in
+    purge)
+        echo "constat-agent : /var/lib/constat (magasin et clés) est conservé volontairement — c'est de la preuve." >&2
+        echo "Pour le supprimer : rm -r /var/lib/constat (après export si nécessaire)." >&2
+        ;;
+esac
+
+exit 0

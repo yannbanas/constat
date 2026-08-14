@@ -1,0 +1,15 @@
+Package: constat-agent
+Version: @VERSION@
+Architecture: @ARCH@
+Depends: constat-tools (= @VERSION@)
+Maintainer: Yann Banas <yannbanas@gmail.com>
+Section: admin
+Priority: optional
+Homepage: https://github.com/yannbanas/constat
+Description: Constat — agent de collecte (lecture seule)
+ L'agent de collecte Constat : lecture seule, aucun port en écoute, aucun
+ code envoyé, expurgation des secrets à la source (§7.1). La collecte est
+ planifiée par systemd (timer constat-agent.timer, non activé par défaut :
+ la décision d'activer reste à l'opérateur).
+ .
+ Via constat-tools, installe aussi `constat` et `constat-verify`.
