@@ -68,10 +68,41 @@ pub fn snapshots(store: &dyn Store) -> Result<Vec<(BlobHash, Snapshot)>, StoreEr
 ///
 /// Les blobs sont lus une seule fois même s'ils sont référencés par plusieurs
 /// snapshots (c'est le cas normal : la déduplication est le cœur du modèle §3.3).
+///
+/// **Attention mémoire** : cette fonction matérialise *toutes* les observations
+/// du parc (un `Observation` par fait × par référence de snapshot). Sur un grand
+/// parc ou une longue rétention, c'est le poste dominant. `constat check` ne
+/// l'emprunte plus : il évalue machine par machine via [`observations_of`] (voir
+/// [`crate::eval::ParkAccumulator`]). Ce chemin global reste utile aux appelants
+/// qui ont réellement besoin de tout le parc d'un coup (`constat pack`, tests).
 pub fn observations(store: &dyn Store) -> Result<Vec<Observation>, StoreError> {
+    let snaps = snapshots(store)?;
+    let refs: Vec<&Snapshot> = snaps.iter().map(|(_, s)| s).collect();
+    observations_of(store, &refs)
+}
+
+/// Les faits d'un **sous-ensemble** de snapshots (déjà triés par date), avec
+/// leur provenance. Sémantique identique à [`observations`], restreinte aux
+/// `snapshots` fournis, et surtout : **cache de blobs local**.
+///
+/// C'est le pivot du fenêtrage par machine de `constat check`. En passant les
+/// seuls snapshots d'une machine, l'appelant borne le pic mémoire aux
+/// observations *d'une* machine : le cache est libéré à chaque appel, jamais
+/// toutes celles du parc à la fois.
+///
+/// Compromis assumé (mémoire ↔ temps) : un blob partagé entre plusieurs
+/// machines n'est plus dédupliqué en lecture d'un appel à l'autre — il est
+/// décompressé une fois par machine qui le référence, au lieu d'une fois pour
+/// tout le parc. En pratique le partage inter-machines de blobs est marginal
+/// (chaque machine a sa propre configuration) ; à l'intérieur d'une machine, la
+/// déduplication d'un blob stable sur toutes ses collectes est, elle, préservée.
+pub fn observations_of(
+    store: &dyn Store,
+    snapshots: &[&Snapshot],
+) -> Result<Vec<Observation>, StoreError> {
     let mut cache: BTreeMap<BlobHash, Blob> = BTreeMap::new();
     let mut out = Vec::new();
-    for (_, snap) in snapshots(store)? {
+    for snap in snapshots {
         for (cid, bh) in &snap.blobs {
             if !cache.contains_key(bh) {
                 cache.insert(*bh, store.get_blob(bh)?);
@@ -100,9 +131,19 @@ pub fn observations(store: &dyn Store) -> Result<Vec<Observation>, StoreError> {
 /// Une déclaration illisible est une erreur : on ne calcule pas une
 /// couverture « honnête » sur une déclaration qu'on ne sait pas lire.
 pub fn purge_gaps(store: &dyn Store) -> Result<Vec<Gap>, QueryError> {
+    purge_gaps_from(store, &snapshots(store)?)
+}
+
+/// Comme [`purge_gaps`], mais à partir d'une liste de snapshots déjà lue —
+/// pour éviter un second parcours du magasin quand l'appelant la tient déjà
+/// (c'est le cas de `constat check`, qui lit les snapshots une seule fois).
+pub fn purge_gaps_from(
+    store: &dyn Store,
+    snapshots: &[(BlobHash, Snapshot)],
+) -> Result<Vec<Gap>, QueryError> {
     let collector = CollectorId(constat_store::PURGE_COLLECTOR.to_string());
     let mut out = Vec::new();
-    for (_, snap) in snapshots(store)? {
+    for (_, snap) in snapshots {
         let Some(blob_hash) = snap.blobs.get(&collector) else {
             continue;
         };
@@ -222,46 +263,64 @@ pub fn history(
     attr: &Attribute,
     period: Option<Period>,
 ) -> Result<History, QueryError> {
-    let obs = observations(store)?;
+    let snaps = snapshots(store)?;
+
+    // Parcours **ciblé** : on ne matérialise jamais toutes les observations du
+    // parc pour les filtrer ensuite (l'ancien travers, cause du pic mémoire de
+    // `history`). On lit les blobs — dédupliqués, en petit nombre — et on ne
+    // retient que les faits de `(entity, attr)`. L'empreinte se réduit aux seuls
+    // changements de cet attribut, plus le cache des blobs distincts ; jamais le
+    // parc entier expansé en `Observation`.
+    let mut cache: BTreeMap<BlobHash, Blob> = BTreeMap::new();
     let mut last: BTreeMap<AssetId, Value> = BTreeMap::new();
     let mut changes = Vec::new();
     let mut relevant_assets: BTreeSet<AssetId> = BTreeSet::new();
 
-    for o in obs
-        .iter()
-        .filter(|o| &o.fact.entity == entity && &o.fact.attribute == attr)
-    {
+    for (_, snap) in &snaps {
         if let Some(p) = period {
-            if o.at < p.from || o.at > p.to {
+            if snap.at < p.from || snap.at > p.to {
                 continue;
             }
         }
-        relevant_assets.insert(o.asset.clone());
-        let before = last.get(&o.asset);
-        match before {
-            None => changes.push(HistoryChange {
-                at: o.at,
-                asset: o.asset.clone(),
-                before: None,
-                after: o.fact.value.clone(),
-                evidence: o.blob,
-            }),
-            Some(prev) if *prev != o.fact.value => changes.push(HistoryChange {
-                at: o.at,
-                asset: o.asset.clone(),
-                before: Some(prev.clone()),
-                after: o.fact.value.clone(),
-                evidence: o.blob,
-            }),
-            Some(_) => {}
+        // Ordre identique à `observations` : snapshots triés (date, actif),
+        // puis blobs dans l'ordre de la table `blobs` (BTreeMap), puis faits —
+        // la suite des changements produits est donc inchangée.
+        for bh in snap.blobs.values() {
+            if !cache.contains_key(bh) {
+                cache.insert(*bh, store.get_blob(bh)?);
+            }
+            let Some(blob) = cache.get(bh) else { continue };
+            for fact in &blob.facts {
+                if &fact.entity != entity || &fact.attribute != attr {
+                    continue;
+                }
+                relevant_assets.insert(snap.asset.clone());
+                match last.get(&snap.asset) {
+                    None => changes.push(HistoryChange {
+                        at: snap.at,
+                        asset: snap.asset.clone(),
+                        before: None,
+                        after: fact.value.clone(),
+                        evidence: *bh,
+                    }),
+                    Some(prev) if *prev != fact.value => changes.push(HistoryChange {
+                        at: snap.at,
+                        asset: snap.asset.clone(),
+                        before: Some(prev.clone()),
+                        after: fact.value.clone(),
+                        evidence: *bh,
+                    }),
+                    Some(_) => {}
+                }
+                last.insert(snap.asset.clone(), fact.value.clone());
+            }
         }
-        last.insert(o.asset.clone(), o.fact.value.clone());
     }
 
     // Couverture : les dates de collecte des machines où l'entité vit, plus
     // les trous déclarés par les purges de rétention (§16) — une période
     // purgée apparaît comme un trou `RetentionPurge`, jamais comme un `Unknown`.
-    let times: Vec<Timestamp> = snapshots(store)?
+    let times: Vec<Timestamp> = snaps
         .iter()
         .filter(|(_, s)| relevant_assets.contains(&s.asset))
         .map(|(_, s)| s.at)
@@ -274,7 +333,7 @@ pub fn history(
             from: times.iter().min().copied().unwrap_or(Timestamp(0)),
             to: times.iter().max().copied().unwrap_or(Timestamp(0)),
         });
-        let declared = purge_gaps(store)?;
+        let declared = purge_gaps_from(store, &snaps)?;
         Some(crate::coverage::coverage_report_declared(
             &times,
             &declared,

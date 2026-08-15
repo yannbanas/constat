@@ -13,10 +13,10 @@ use std::path::Path;
 
 use constat_anchor::rfc3161::{parse_response, TimeStampRequest};
 use constat_anchor::root::{sign_root_export, RootExportDocument};
-use constat_model::{AssetId, Attribute, EntityId, Timestamp};
-use constat_policy::{Assertion, Evaluation, Verdict};
+use constat_model::{AssetId, Attribute, BlobHash, EntityId, Snapshot, Timestamp};
+use constat_policy::{Assertion, Evaluation, EvaluationOptions, Verdict};
 use constat_store::Store;
-use constat_time::Period;
+use constat_time::{CoverageReport, Gap, Period};
 use miette::{miette, IntoDiagnostic};
 
 use crate::coverage::DEFAULT_MAX_EXPECTED_GAP;
@@ -104,31 +104,29 @@ fn resolve_period(store: &dyn Store, period: Option<&str>) -> miette::Result<Opt
     })
 }
 
-/// Évalue toutes les assertions sur une période : le socle de `check` et `pack`.
-fn evaluate_all(
-    store: &dyn Store,
-    assertions: &[Assertion],
-    period: Period,
-) -> miette::Result<(Vec<Evaluation>, Vec<constat_policy::EvaluationInput>)> {
-    let obs = queries::observations(store).into_diagnostic()?;
-    let snap_times: Vec<(AssetId, Timestamp)> = queries::snapshots(store)
-        .into_diagnostic()?
-        .iter()
-        .map(|(_, s)| (s.asset.clone(), s.at))
-        .collect();
+/// Les données de parc communes à `check` et `pack`, lues une seule fois : la
+/// liste des snapshots (manifestes légers), les interruptions déclarées et la
+/// couverture de parc. C'est volontairement *tout* ce qui reste matérialisé à
+/// l'échelle du parc — les observations, elles, sont lues par tranches (voir
+/// [`stream_evaluations`]).
+struct ParkFrame {
+    snaps: Vec<(BlobHash, Snapshot)>,
+    /// Interruptions déclarées (§16) : purges de rétention journalisées.
+    purge_gaps: Vec<Gap>,
+    /// Couverture de parc — même valeur pour toutes les assertions.
+    park_coverage: CoverageReport,
+}
+
+/// Lit une fois les manifestes de snapshots, les purges déclarées et en dérive
+/// la couverture de parc. Ne touche à aucun blob : empreinte à l'échelle du
+/// magasin (les manifestes), pas des observations.
+fn park_frame(store: &dyn Store, period: Period) -> miette::Result<ParkFrame> {
+    let snaps = queries::snapshots(store).into_diagnostic()?;
     // Les purges de rétention journalisées (§16) sont des interruptions
     // déclarées : une période purgée apparaît comme un trou `RetentionPurge`
     // dans chaque couverture, jamais comme un trou inexpliqué.
-    let purge_gaps = queries::purge_gaps(store).into_diagnostic()?;
-    let inputs = eval::build_inputs_with_gaps(
-        &obs,
-        &snap_times,
-        &purge_gaps,
-        period,
-        DEFAULT_MAX_EXPECTED_GAP,
-    )
-    .into_diagnostic()?;
-    let times: Vec<Timestamp> = snap_times.iter().map(|(_, t)| *t).collect();
+    let purge_gaps = queries::purge_gaps_from(store, &snaps).into_diagnostic()?;
+    let times: Vec<Timestamp> = snaps.iter().map(|(_, s)| s.at).collect();
     let park_coverage = crate::coverage::coverage_report_declared(
         &times,
         &purge_gaps,
@@ -136,11 +134,116 @@ fn evaluate_all(
         DEFAULT_MAX_EXPECTED_GAP,
     )
     .into_diagnostic()?;
+    Ok(ParkFrame {
+        snaps,
+        purge_gaps,
+        park_coverage,
+    })
+}
+
+/// Évalue toutes les assertions sur une période, chemin « tout en mémoire ».
+///
+/// Socle de `constat pack`, qui a besoin, en plus des verdicts, des entrées par
+/// machine ([`constat_policy::EvaluationInput`]) pour restituer les
+/// interruptions par machine du dossier. `constat check`, lui, passe par
+/// [`stream_evaluations`] pour ne jamais matérialiser tout le parc.
+fn evaluate_all(
+    store: &dyn Store,
+    assertions: &[Assertion],
+    period: Period,
+) -> miette::Result<(Vec<Evaluation>, Vec<constat_policy::EvaluationInput>)> {
+    let frame = park_frame(store, period)?;
+    let refs: Vec<&Snapshot> = frame.snaps.iter().map(|(_, s)| s).collect();
+    let obs = queries::observations_of(store, &refs).into_diagnostic()?;
+    let snap_times: Vec<(AssetId, Timestamp)> = frame
+        .snaps
+        .iter()
+        .map(|(_, s)| (s.asset.clone(), s.at))
+        .collect();
+    let inputs = eval::build_inputs_with_gaps(
+        &obs,
+        &snap_times,
+        &frame.purge_gaps,
+        period,
+        DEFAULT_MAX_EXPECTED_GAP,
+    )
+    .into_diagnostic()?;
     let mut results = Vec::with_capacity(assertions.len());
     for a in assertions {
-        results.push(eval::evaluate_park(a, &inputs, park_coverage.clone()).into_diagnostic()?);
+        results
+            .push(eval::evaluate_park(a, &inputs, frame.park_coverage.clone()).into_diagnostic()?);
     }
     Ok((results, inputs))
+}
+
+/// Évalue toutes les assertions **par machine, à empreinte mémoire bornée** :
+/// le socle de `constat check`.
+///
+/// Le verdict de parc est une agrégation par machine (`merge_verdicts`, via
+/// [`eval::ParkAccumulator`]) ; on peut donc traiter les machines une à une.
+/// Pour chaque machine, on charge ses seules observations, on construit son
+/// unique entrée d'évaluation, on l'intègre à chaque accumulateur d'assertion,
+/// puis on **libère** avant de passer à la suivante. Le pic mémoire devient
+/// « une machine » au lieu de « tout le parc ».
+///
+/// Résultat **strictement identique** à [`evaluate_all`] (mêmes verdicts,
+/// mêmes violations dans le même ordre, même couverture) : les machines sont
+/// parcourues dans l'ordre trié de leur identifiant — l'ordre exact qu'aurait
+/// produit `build_inputs_with_gaps` sur tout le parc (sa `BTreeMap` par actif) —
+/// et chaque machine reçoit ses snapshots dans l'ordre global (date, actif).
+fn stream_evaluations(
+    store: &dyn Store,
+    assertions: &[Assertion],
+    period: Period,
+) -> miette::Result<Vec<Evaluation>> {
+    let frame = park_frame(store, period)?;
+    let options = EvaluationOptions::default();
+
+    // Regroupe les indices de snapshots par machine, en préservant l'ordre
+    // global (les snapshots sont déjà triés par date puis actif) : le sous-
+    // ensemble d'une machine est donc dans l'ordre attendu par la construction
+    // des plages de stabilité.
+    let mut by_asset: std::collections::BTreeMap<AssetId, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (i, (_, s)) in frame.snaps.iter().enumerate() {
+        by_asset.entry(s.asset.clone()).or_default().push(i);
+    }
+
+    let mut accs: Vec<eval::ParkAccumulator> = (0..assertions.len())
+        .map(|_| eval::ParkAccumulator::default())
+        .collect();
+
+    for (asset, idxs) in &by_asset {
+        let snaps_of_asset: Vec<&Snapshot> = idxs.iter().map(|&i| &frame.snaps[i].1).collect();
+        let obs = queries::observations_of(store, &snaps_of_asset).into_diagnostic()?;
+        let asset_times: Vec<(AssetId, Timestamp)> = idxs
+            .iter()
+            .map(|&i| (asset.clone(), frame.snaps[i].1.at))
+            .collect();
+        // Une seule machine en entrée : `build_inputs_with_gaps` renvoie son
+        // unique `EvaluationInput` (identique à celui du chemin global, dont la
+        // construction est indépendante d'un actif à l'autre).
+        let inputs = eval::build_inputs_with_gaps(
+            &obs,
+            &asset_times,
+            &frame.purge_gaps,
+            period,
+            DEFAULT_MAX_EXPECTED_GAP,
+        )
+        .into_diagnostic()?;
+        for input in &inputs {
+            for (acc, a) in accs.iter_mut().zip(assertions) {
+                acc.observe(a, input, &options).into_diagnostic()?;
+            }
+        }
+        // `obs` et `inputs` sont libérés ici : le pic reste borné à une machine.
+    }
+
+    Ok(accs
+        .into_iter()
+        .zip(assertions)
+        .map(|(acc, a)| acc.finish(a, frame.park_coverage.clone()))
+        .collect())
 }
 
 /// `constat check [--period <p>] [--explain]`. Renvoie la sortie et un
@@ -165,7 +268,7 @@ pub fn cmd_check(
             false,
         ));
     };
-    let (results, _) = evaluate_all(store, &assertions, period)?;
+    let results = stream_evaluations(store, &assertions, period)?;
     let any_fail = results.iter().any(|e| e.verdict == Verdict::Fail);
     let mut out = format!("{}\n\n", render::period_header(period));
     out.push_str(&render::render_check(&results, explain));
@@ -696,4 +799,215 @@ pub fn cmd_anchor(store: &dyn Store, args: &AnchorArgs<'_>) -> miette::Result<St
         );
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Non-régression du verdict après le fenêtrage de `check` : le chemin
+    //! fenêtré ([`stream_evaluations`], machine par machine, à empreinte
+    //! bornée) doit rendre EXACTEMENT le même résultat que le chemin « tout en
+    //! mémoire » ([`evaluate_all`]) — mêmes verdicts, mêmes violations dans le
+    //! même ordre, mêmes exceptions appliquées, même couverture.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{evaluate_all, stream_evaluations};
+    use std::collections::BTreeMap;
+
+    use constat_model::{
+        AssetId, Attribute, Blob, CollectorId, EntityId, Fact, Snapshot, Timestamp, Value,
+    };
+    use constat_policy::{
+        Assertion, AssertionId, AssetSelector, EntityPattern, Exception, Predicate, Verdict,
+    };
+    use constat_store::{append_signed, MemoryStore, Signer, Store};
+    use constat_time::Period;
+
+    fn fact(entity: &str, attr: &str, value: Value) -> Fact {
+        Fact {
+            entity: EntityId(entity.to_string()),
+            attribute: Attribute(attr.to_string()),
+            value,
+        }
+    }
+
+    /// Une collecte : un blob, un snapshot, une entrée de journal signée.
+    fn inject(store: &mut MemoryStore, signer: &Signer, asset: &str, at: i64, facts: Vec<Fact>) {
+        let blob = Blob {
+            collector: CollectorId("inventaire".to_string()),
+            raw: format!("{asset}@{at}").into_bytes(),
+            facts,
+        };
+        let bh = store.put_blob(&blob).unwrap();
+        let mut blobs = BTreeMap::new();
+        blobs.insert(CollectorId("inventaire".to_string()), bh);
+        let snap = Snapshot {
+            asset: AssetId(asset.to_string()),
+            at: Timestamp(at),
+            blobs,
+        };
+        let sh = store.put_snapshot(&snap).unwrap();
+        append_signed(store, signer, vec![sh], Timestamp(at)).unwrap();
+    }
+
+    /// Parc de trois machines : `srv-a` (linux, un admin privilégié → viole),
+    /// `srv-b` (linux, propre), `srv-win` (windows, un root privilégié). Les
+    /// collectes sont entrelacées dans le temps pour que l'ordre global
+    /// (date, actif) ne coïncide pas avec l'ordre par machine — c'est
+    /// précisément ce que le regroupement fenêtré doit reconstituer.
+    fn parc() -> MemoryStore {
+        let mut store = MemoryStore::new();
+        let signer = Signer::generate();
+        let os = |m: &str, v: &str| fact(&format!("asset:{m}"), "asset.os", Value::Text(v.into()));
+
+        inject(
+            &mut store,
+            &signer,
+            "srv-a",
+            1_000,
+            vec![
+                os("srv-a", "linux"),
+                fact("user:jdupont", "user.privileged", Value::Bool(false)),
+            ],
+        );
+        inject(
+            &mut store,
+            &signer,
+            "srv-b",
+            1_100,
+            vec![
+                os("srv-b", "linux"),
+                fact("user:alice", "user.privileged", Value::Bool(false)),
+            ],
+        );
+        inject(
+            &mut store,
+            &signer,
+            "srv-win",
+            1_200,
+            vec![
+                os("srv-win", "windows"),
+                fact("user:root", "user.privileged", Value::Bool(true)),
+            ],
+        );
+        inject(
+            &mut store,
+            &signer,
+            "srv-a",
+            2_000,
+            vec![
+                os("srv-a", "linux"),
+                fact("user:jdupont", "user.privileged", Value::Bool(true)),
+            ],
+        );
+        inject(
+            &mut store,
+            &signer,
+            "srv-b",
+            2_100,
+            vec![
+                os("srv-b", "linux"),
+                fact("user:alice", "user.privileged", Value::Bool(false)),
+            ],
+        );
+        inject(
+            &mut store,
+            &signer,
+            "srv-win",
+            2_200,
+            vec![
+                os("srv-win", "windows"),
+                fact("user:root", "user.privileged", Value::Bool(true)),
+            ],
+        );
+        store
+    }
+
+    fn never_privileged(id: &str, scope: AssetSelector, exceptions: Vec<Exception>) -> Assertion {
+        Assertion {
+            id: AssertionId(id.to_string()),
+            title: format!("aucun compte privilégié ({id})"),
+            scope,
+            predicate: Predicate::Never {
+                entity: EntityPattern::Glob("user:*".to_string()),
+                attr: Attribute("user.privileged".to_string()),
+                equals: Value::Bool(true),
+            },
+            exceptions,
+        }
+    }
+
+    fn linux() -> AssetSelector {
+        AssetSelector {
+            os: Some("linux".to_string()),
+            tag: None,
+            domain: None,
+        }
+    }
+
+    fn solaris() -> AssetSelector {
+        AssetSelector {
+            os: Some("solaris".to_string()),
+            tag: None,
+            domain: None,
+        }
+    }
+
+    fn exception(entity: &str) -> Exception {
+        Exception {
+            entity: entity.to_string(),
+            reason: "dérogation de test".to_string(),
+            approved_by: "rssi".to_string(),
+            expires: "2099-01-01".to_string(),
+        }
+    }
+
+    /// Le cœur de la preuve : sur un parc multi-machines et un jeu d'assertions
+    /// couvrant portée large / restreinte / vide et exceptions, le chemin
+    /// fenêtré et le chemin global rendent des `Evaluation` identiques.
+    #[test]
+    fn fenetre_et_global_rendent_le_meme_verdict() {
+        let store = parc();
+        let period = Period {
+            from: Timestamp(0),
+            to: Timestamp(10_000),
+        };
+        let assertions = vec![
+            // Portée linux : srv-a viole, srv-win exclue → Fail, 1 violation.
+            never_privileged("LNX", linux(), vec![]),
+            // Portée large + exception jdupont : la violation de srv-a est
+            // neutralisée (exception appliquée), celle de srv-win (root) reste.
+            never_privileged(
+                "ALL-EXC",
+                AssetSelector::default(),
+                vec![exception("user:jdupont")],
+            ),
+            // Portée vide (aucune machine solaris) → Undetermined, périmètre nul.
+            never_privileged("SOL", solaris(), vec![]),
+        ];
+
+        let (global, _) = evaluate_all(&store, &assertions, period).expect("chemin global");
+        let windowed = stream_evaluations(&store, &assertions, period).expect("chemin fenêtré");
+
+        assert_eq!(
+            windowed, global,
+            "le fenêtrage par machine ne doit RIEN changer au verdict de parc"
+        );
+
+        // Et les verdicts attendus sont bien ceux du modèle (ancrage explicite).
+        assert_eq!(windowed[0].verdict, Verdict::Fail);
+        assert_eq!(windowed[0].violations.len(), 1);
+        assert_eq!(windowed[0].violations[0].asset.0, "srv-a");
+
+        assert_eq!(windowed[1].verdict, Verdict::Fail);
+        assert_eq!(windowed[1].violations.len(), 1);
+        assert_eq!(windowed[1].violations[0].asset.0, "srv-win");
+        assert_eq!(windowed[1].applied_exceptions.len(), 1);
+        assert_eq!(
+            windowed[1].applied_exceptions[0].neutralized.asset.0,
+            "srv-a"
+        );
+
+        assert_eq!(windowed[2].verdict, Verdict::Undetermined);
+        assert!(windowed[2].violations.is_empty());
+    }
 }

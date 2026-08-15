@@ -190,6 +190,87 @@ fn merge_verdicts(verdicts: &[Verdict]) -> Verdict {
     }
 }
 
+/// Accumulateur incrémental d'un verdict de parc — l'équivalent **fenêtré**
+/// de [`evaluate_park_with`], machine par machine.
+///
+/// Au lieu de recevoir d'un coup toutes les entrées du parc (et donc de garder
+/// en mémoire toutes leurs observations), on les intègre une à une avec
+/// [`observe`](ParkAccumulator::observe) puis on clôt avec
+/// [`finish`](ParkAccumulator::finish). Le pic mémoire de `constat check`
+/// tombe ainsi de « tout le parc » à « une machine » : une fois une machine
+/// intégrée, ses observations sont libérées, seul l'état agrégé (verdict,
+/// violations restantes, exceptions appliquées) survit.
+///
+/// La sémantique est **strictement identique** à [`evaluate_park_with`] — qui
+/// est d'ailleurs réécrite en fonction de ce type, pour que les deux chemins
+/// ne puissent pas diverger : un `Fail` n'est jamais blanchi, `Undetermined`
+/// dès qu'une couverture est insuffisante et qu'aucun `Fail` n'existe, et
+/// `Undetermined` aussi sur un périmètre vide ([`merge_verdicts`]).
+#[derive(Debug, Default)]
+pub struct ParkAccumulator {
+    saw_fail: bool,
+    saw_undetermined: bool,
+    /// Au moins une machine a été retenue par la portée : sans cela, le
+    /// périmètre est vide et le verdict reste `Undetermined`.
+    in_scope: bool,
+    violations: Vec<constat_policy::Violation>,
+    applied_exceptions: Vec<constat_policy::AppliedException>,
+}
+
+impl ParkAccumulator {
+    /// Intègre une machine : applique la portée ([`scope_selects`]) puis, si
+    /// la machine est retenue, l'évalue et accumule son verdict, ses
+    /// violations et ses exceptions appliquées. Miroir exact du corps de
+    /// boucle de [`evaluate_park_with`].
+    pub fn observe(
+        &mut self,
+        assertion: &Assertion,
+        input: &EvaluationInput,
+        options: &EvaluationOptions,
+    ) -> Result<(), PolicyError> {
+        if !scope_selects(&assertion.scope, &input.asset, &input.facts) {
+            return Ok(());
+        }
+        let e = evaluate_with(assertion, input, options)?;
+        self.in_scope = true;
+        match e.verdict {
+            Verdict::Fail => self.saw_fail = true,
+            Verdict::Undetermined => self.saw_undetermined = true,
+            Verdict::Pass => {}
+        }
+        self.violations.extend(e.violations);
+        self.applied_exceptions.extend(e.applied_exceptions);
+        Ok(())
+    }
+
+    /// Le verdict agrégé — reproduit exactement [`merge_verdicts`] sur la
+    /// suite des verdicts des machines retenues (un `Fail` domine ; sinon un
+    /// périmètre vide ou un `Undetermined` donne `Undetermined` ; sinon `Pass`).
+    fn verdict(&self) -> Verdict {
+        if self.saw_fail {
+            Verdict::Fail
+        } else if !self.in_scope || self.saw_undetermined {
+            Verdict::Undetermined
+        } else {
+            Verdict::Pass
+        }
+    }
+
+    /// Clôt l'accumulation en une [`Evaluation`] de parc portée par la
+    /// couverture de parc fournie.
+    pub fn finish(self, assertion: &Assertion, park_coverage: CoverageReport) -> Evaluation {
+        Evaluation {
+            assertion: assertion.id.clone(),
+            title: assertion.title.clone(),
+            asset: None,
+            verdict: self.verdict(),
+            coverage: park_coverage,
+            violations: self.violations,
+            applied_exceptions: self.applied_exceptions,
+        }
+    }
+}
+
 /// Évalue une assertion sur tout le parc (toutes les entrées par machine),
 /// et agrège en une évaluation unique portée par la couverture de parc.
 ///
@@ -197,33 +278,22 @@ fn merge_verdicts(verdicts: &[Verdict]) -> Verdict {
 /// machines hors portée — ou sans le fait d'inventaire requis — sont
 /// exclues. Si aucune machine n'est sélectionnée, le verdict est
 /// `Undetermined` : on ne se prononce pas sur un périmètre vide.
+///
+/// Chemin « tout en mémoire » : conservé pour les appelants qui disposent
+/// déjà de toutes les entrées (`constat pack`, tests). `constat check`, lui,
+/// passe par [`ParkAccumulator`] pour ne jamais matérialiser tout le parc —
+/// mais les deux partagent le même corps, gage qu'ils ne divergent pas.
 pub fn evaluate_park_with(
     assertion: &Assertion,
     inputs: &[EvaluationInput],
     park_coverage: CoverageReport,
     options: &EvaluationOptions,
 ) -> Result<Evaluation, PolicyError> {
-    let mut verdicts = Vec::with_capacity(inputs.len());
-    let mut violations = Vec::new();
-    let mut applied_exceptions = Vec::new();
+    let mut acc = ParkAccumulator::default();
     for input in inputs {
-        if !scope_selects(&assertion.scope, &input.asset, &input.facts) {
-            continue;
-        }
-        let e = evaluate_with(assertion, input, options)?;
-        verdicts.push(e.verdict);
-        violations.extend(e.violations);
-        applied_exceptions.extend(e.applied_exceptions);
+        acc.observe(assertion, input, options)?;
     }
-    Ok(Evaluation {
-        assertion: assertion.id.clone(),
-        title: assertion.title.clone(),
-        asset: None,
-        verdict: merge_verdicts(&verdicts),
-        coverage: park_coverage,
-        violations,
-        applied_exceptions,
-    })
+    Ok(acc.finish(assertion, park_coverage))
 }
 
 /// [`evaluate_park_with`] avec les paramètres par défaut du moteur
