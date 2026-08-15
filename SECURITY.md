@@ -34,7 +34,11 @@ chiffré et une clé vous sera fournie.
 ## Périmètre — ce qui nous inquiète particulièrement
 
 Le modèle de menace complet est décrit dans
-[CONSTAT-ARCHITECTURE.md](CONSTAT-ARCHITECTURE.md) (§6, §7, §17). En résumé :
+[docs/securite/modele-de-menace.md](docs/securite/modele-de-menace.md) (et
+`CONSTAT-ARCHITECTURE.md` §6, §7, §17). Les résultats des revues adversariales
+internes sont consignés dans
+[docs/securite/revue-adversariale-interne.md](docs/securite/revue-adversariale-interne.md).
+En résumé :
 
 **L'agent lit des configurations sensibles** (`sshd_config`, `sudoers`,
 comptes, politiques de mots de passe…) sur toutes les machines du parc. Sont
