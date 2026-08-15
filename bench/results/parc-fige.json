@@ -1,0 +1,103 @@
+{
+  "params": {
+    "label": "parc-fige",
+    "machines": 200,
+    "days": 90,
+    "per_day": 4,
+    "drift_percent": 0.0,
+    "seed": 42,
+    "state_samples": 20
+  },
+  "started_at_utc_ms": 1767225600000,
+  "ingest": {
+    "total_snapshots": 72000,
+    "wall_seconds": 264.3487181,
+    "snapshots_per_second": 272.36750197806236,
+    "put_blob_seconds": 17.6700292,
+    "put_snapshot_seconds": 244.4859746,
+    "append_entry_seconds": 1.7505271,
+    "generation_seconds": 0.0466519,
+    "blob_hash_micros_avg": 42.5265,
+    "sign_entry_micros_avg": 373.87799999999993,
+    "checkpoints": [
+      {
+        "day": 30,
+        "store_file_bytes": 26521600,
+        "collected_bytes": 538536000,
+        "ratio_stored_over_collected": 0.04924758976187293,
+        "blob_count": 603,
+        "snapshot_count": 24000,
+        "entry_count": 120
+      },
+      {
+        "day": 60,
+        "store_file_bytes": 59670528,
+        "collected_bytes": 1077072000,
+        "ratio_stored_over_collected": 0.05540068630509381,
+        "blob_count": 603,
+        "snapshot_count": 48000,
+        "entry_count": 240
+      },
+      {
+        "day": 90,
+        "store_file_bytes": 89505792,
+        "collected_bytes": 1615608000,
+        "ratio_stored_over_collected": 0.05540068630509381,
+        "blob_count": 603,
+        "snapshot_count": 72000,
+        "entry_count": 360
+      }
+    ],
+    "mem_after": {
+      "working_set_mib": 59.3359375,
+      "peak_working_set_mib": 83.41796875
+    }
+  },
+  "store_bytes_extrapolated_3y_linear": 1088987136,
+  "state_query": {
+    "samples": 20,
+    "median_ms": 6052.9671,
+    "min_ms": 3082.1721000000002,
+    "max_ms": 10285.8964,
+    "facts_per_state": 153
+  },
+  "history": {
+    "entity": "pkg:openssl-000",
+    "attribute": "pkg.version",
+    "wall_seconds": 23.4486979,
+    "changes": 200,
+    "mem_after": {
+      "working_set_mib": 112.1328125,
+      "peak_working_set_mib": 4078.90625
+    }
+  },
+  "check": {
+    "wall_seconds": 41.3846322,
+    "observations_seconds": 12.5872847,
+    "observations_count": 11016000,
+    "build_inputs_seconds": 17.8111489,
+    "evaluate_seconds": 0.0411166,
+    "verdict": "Pass",
+    "violations": 0,
+    "mem_after": {
+      "working_set_mib": 3754.328125,
+      "peak_working_set_mib": 4848.9921875
+    }
+  },
+  "export": {
+    "wall_seconds": 311.0767253,
+    "dir_bytes": 44948918,
+    "file_count": 72964,
+    "load_seconds": 9.7895348,
+    "verify_seconds": 0.7298499,
+    "verify_root_hex": "4e0bc3e57f556413dee6ddf6210ed90f68556e82f6dab50a2a980fcd38c882db",
+    "verified_entries": 360,
+    "verified_snapshots": 72000,
+    "verified_blobs": 603,
+    "mem_after": {
+      "working_set_mib": 173.1015625,
+      "peak_working_set_mib": 4848.9921875
+    }
+  },
+  "peak_working_set_mib": 4848.9921875
+}

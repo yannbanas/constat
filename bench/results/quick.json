@@ -1,0 +1,85 @@
+{
+  "params": {
+    "label": "quick",
+    "machines": 20,
+    "days": 14,
+    "per_day": 4,
+    "drift_percent": 1.0,
+    "seed": 42,
+    "state_samples": 20
+  },
+  "started_at_utc_ms": 1767225600000,
+  "ingest": {
+    "total_snapshots": 1120,
+    "wall_seconds": 2.1740737,
+    "snapshots_per_second": 515.1619285031597,
+    "put_blob_seconds": 0.2695462,
+    "put_snapshot_seconds": 1.7997788,
+    "append_entry_seconds": 0.0983862,
+    "generation_seconds": 0.0064539,
+    "blob_hash_micros_avg": 21.1143,
+    "sign_entry_micros_avg": 42.1125,
+    "checkpoints": [
+      {
+        "day": 14,
+        "store_file_bytes": 1748992,
+        "collected_bytes": 25131680,
+        "ratio_stored_over_collected": 0.06959311912295557,
+        "blob_count": 76,
+        "snapshot_count": 1120,
+        "entry_count": 56
+      }
+    ],
+    "mem_after": {
+      "working_set_mib": 9.375,
+      "peak_working_set_mib": 10.45703125
+    }
+  },
+  "store_bytes_extrapolated_3y_linear": 136796160,
+  "state_query": {
+    "samples": 20,
+    "median_ms": 37.3091,
+    "min_ms": 33.9895,
+    "max_ms": 49.2315,
+    "facts_per_state": 153
+  },
+  "history": {
+    "entity": "pkg:systemd-042",
+    "attribute": "pkg.version",
+    "wall_seconds": 0.2315232,
+    "changes": 21,
+    "mem_after": {
+      "working_set_mib": 10.8203125,
+      "peak_working_set_mib": 73.00390625
+    }
+  },
+  "check": {
+    "wall_seconds": 0.3237807,
+    "observations_seconds": 0.1439071,
+    "observations_count": 171360,
+    "build_inputs_seconds": 0.1134721,
+    "evaluate_seconds": 0.0020738,
+    "verdict": "Pass",
+    "violations": 0,
+    "mem_after": {
+      "working_set_mib": 65.125,
+      "peak_working_set_mib": 83.5546875
+    }
+  },
+  "export": {
+    "wall_seconds": 3.6404439,
+    "dir_bytes": 1259903,
+    "file_count": 1253,
+    "load_seconds": 0.1597947,
+    "verify_seconds": 0.012757,
+    "verify_root_hex": "739f427b5d2a61ab4a571dee9b69e136cac47f70a136744116f2a6839e9ef1de",
+    "verified_entries": 56,
+    "verified_snapshots": 1120,
+    "verified_blobs": 76,
+    "mem_after": {
+      "working_set_mib": 12.97265625,
+      "peak_working_set_mib": 83.5546875
+    }
+  },
+  "peak_working_set_mib": 83.5546875
+}
