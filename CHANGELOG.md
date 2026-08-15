@@ -7,6 +7,8 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.5.0] — 2026-08-14
+
 ### Modifié
 
 - **Montée de Calque v0.3.0 → v0.6.0.** La preuve de segmentation
