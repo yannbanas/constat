@@ -209,8 +209,8 @@ dependencies = [
 
 [[package]]
 name = "calque-engine"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-model",
  "calque-space",
@@ -220,8 +220,8 @@ dependencies = [
 
 [[package]]
 name = "calque-model"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "ipnet",
  "serde",
@@ -229,8 +229,8 @@ dependencies = [
 
 [[package]]
 name = "calque-parse"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-model",
  "quick-xml",
@@ -240,8 +240,8 @@ dependencies = [
 
 [[package]]
 name = "calque-policy"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-engine",
  "calque-model",
@@ -253,8 +253,8 @@ dependencies = [
 
 [[package]]
 name = "calque-space"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-model",
  "ipnet",
@@ -263,8 +263,8 @@ dependencies = [
 
 [[package]]
 name = "calque-vendors"
-version = "0.3.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.3.0#47890ef7cd91699269cb8cf0508b7272140046a6"
+version = "0.6.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-model",
  "calque-parse",

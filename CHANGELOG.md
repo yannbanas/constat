@@ -7,6 +7,22 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+### Modifié
+
+- **Montée de Calque v0.3.0 → v0.6.0.** La preuve de segmentation
+  (`constat segmentation`) bénéficie de tout ce qui a été ajouté au moteur
+  de Calque : modélisation FortiGate des VIP, du SD-WAN (multi-WAN évalué
+  en ECMP), des tunnels IPsec (sélecteurs phase2), des routes par objet ;
+  sortie de périmètre ferme ; résolution optionnelle des objets externes
+  (fqdn/géographie) ; ICMP par type ; objets adresse IPv6 ; et surtout la
+  **fidélité PAR CHEMIN** : un verdict de segmentation n'est « non
+  concluant » que si une lacune de modélisation touche le chemin décisif du
+  flux, plus dès qu'un équipement est globalement partiel. Sur une
+  configuration réelle, la plupart des verdicts deviennent donc FERMES —
+  exactement ce qu'exige une preuve. La sûreté est préservée : une règle
+  dont le modèle sur-approxime la portée (restriction par identité,
+  internet-service, négation) rend toujours le verdict non ferme, jamais un
+  faux « conforme » (`evaluate_flows(&network, flows, false)`).
 ## [0.4.0] — 2026-08-14
 
 Version de préparation à la production : les bloquants identifiés lors de la

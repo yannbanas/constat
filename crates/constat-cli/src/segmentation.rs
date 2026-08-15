@@ -347,7 +347,16 @@ fn evaluate_configs(
     network.links.extend(inferred);
     let network = prepare_for_engine(&network);
 
-    let results = evaluate_flows(&network, flows, &fidelity);
+    // `allow_partial = false` : Constat produit des PREUVES, il exige des
+    // verdicts fermes. Depuis calque v0.6.0, la fidélité est évaluée PAR
+    // CHEMIN — un verdict n'est « non ferme » que si une lacune de
+    // modélisation (objet externe non résolu, règle sur-approximée par
+    // identité/internet-service/négation) touche le chemin décisif du
+    // flux. Une lacune sans rapport (multicast, objet dynamique…) ne
+    // déclasse plus le verdict. C'est exactement la sémantique voulue pour
+    // une preuve : ferme quand c'est démontrable, non ferme (jamais un
+    // faux « autorisé ») quand le chemin dépend d'une approximation.
+    let results = evaluate_flows(&network, flows, false);
     let verdicts = results
         .iter()
         .map(|r| classify(r, has_unreadable))
