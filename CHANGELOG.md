@@ -7,8 +7,50 @@ projet adhère au [versionnage sémantique](https://semver.org/lang/fr/).
 
 ## [Non publié]
 
+## [0.4.0] — 2026-08-14
+
+Version de préparation à la production : les bloquants identifiés lors de la
+revue de maturité sont levés, une revue de sécurité adversariale a été menée
+et ses trouvailles corrigées, et la promesse de stockage du §3.3 est vérifiée
+chiffres en main.
+
+### Sécurité
+
+- **Revue adversariale interne** (`docs/securite/`) : deux revues indépendantes
+  (falsification de preuve ; fuite de secrets et compromission). Aucune
+  falsification de preuve possible (cœur cryptographique solide). Vecteurs de
+  fuite de secrets trouvés **et corrigés**, chacun avec un test qui reproduit
+  l'attaque : identifiants d'URL (`postgres://user:pass@…`, **critique**), XML
+  compact multi-balises, secrets positionnels (`-pXXX`, `--password X`).
+  Conformité du vérificateur rétablie (il exige désormais
+  `blake3(octets du fichier) == nom`, comme `FORMAT.md` le promet — deux
+  vérificateurs conformes ne peuvent plus diverger). DoS de disponibilité
+  corrigé : connexions serveur bornées (sémaphore, `--max-connections`). Espace
+  de noms `constat.*` réservé aux déclarations signées.
+
+### Performance
+
+- **`check` et `history` à empreinte mémoire bornée** : le benchmark a chiffré
+  un pic à ~4,8 Gio (dépliage de toutes les observations du parc). Ces deux
+  commandes traitent désormais les machines une par une (pic ~80 Mio, croissance
+  bornée au lieu de tendre vers l'OOM). Verdicts, format et empreintes
+  strictement inchangés (le chemin global des tests est réécrit sur le même
+  accumulateur en flux). `docs/benchmarks.md` : résultats réels (200 machines ×
+  90 jours × 3 profils de dérive) — promesse §3.3 tenue (3 ans / 200 machines
+  ≈ 1 Gio), vérification par un tiers < 2 s.
+
 ### Ajouté
 
+- **Purge de rétention journalisée** (§16, bloquant de production) : la purge se
+  déclare dans le journal **avant** de supprimer (période, motif, manifeste des
+  empreintes), la chaîne n'est jamais réécrite. `constat-verify` distingue une
+  absence légitimement purgée (postérieurement déclarée) d'une altération.
+  `constat purge` / `constat retention`, trous `RetentionPurge` dans la
+  couverture, `docs/rgpd/` (registre de traitement, fonctionnement).
+- **Privilèges minimaux de l'agent** (§7.1) : en mode `--once`, abandon
+  `setgroups`/`setresgid`/`setresuid` avant toute connexion réseau, avec
+  vérification que la réacquisition échoue. Unité systemd durcie (chaque
+  directive commentée).
 - **Gestion et rotation des clés de signature** (bloquant de production) —
   une rotation est un constat réservé, sur le modèle de la purge : blob
   `constat.rotation` (faits `rotation.old_key`/`rotation.new_key` en
@@ -260,7 +302,8 @@ non-répudiation : celui qui détient la clé peut tronquer la fin du journal.
 Constat ne détecte pas un agent compromis qui mentirait, et ne dit rien d'une
 machine sans agent.
 
-[Non publié] : https://github.com/yannbanas/constat/compare/v0.3.0...HEAD
+[Non publié] : https://github.com/yannbanas/constat/compare/v0.4.0...HEAD
+[0.4.0] : https://github.com/yannbanas/constat/compare/v0.3.0...v0.4.0
 [0.3.0] : https://github.com/yannbanas/constat/compare/v0.2.0...v0.3.0
 [0.2.0] : https://github.com/yannbanas/constat/compare/v0.1.0...v0.2.0
 [0.1.0] : https://github.com/yannbanas/constat/releases/tag/v0.1.0
