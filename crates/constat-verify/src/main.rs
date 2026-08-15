@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use constat_model::{from_canonical_bytes, Blob, BlobHash, Snapshot};
+use constat_model::{from_canonical_bytes, to_canonical_bytes, Blob, BlobHash, Snapshot};
 use constat_store::JournalEntry;
 use constat_verify::{verify_export, Export};
 
@@ -96,6 +96,21 @@ fn run(dir: &Path) -> Result<String, String> {
             .map_err(|e| format!("lecture de {} impossible : {e}", path.display()))?;
         let entry: JournalEntry = from_canonical_bytes(&bytes)
             .map_err(|e| format!("{} : entrée illisible ({e})", path.display()))?;
+        // FORMAT.md §1 & §3 : l'empreinte de chaînage d'une entrée est
+        // blake3(octets du fichier). `verify_export` la reproduit via
+        // hash_canonical(entrée décodée) = blake3(ré-encodage canonique), ce
+        // qui n'est FIDÈLE que si les octets lus SONT déjà l'encodage
+        // canonique. Un fichier aux octets non canoniques — que ciborium
+        // décode sans broncher — serait rejeté par tout vérificateur tiers
+        // qui hache les octets bruts (FORMAT.md §1) ; on le rejette donc ici,
+        // avant de faire confiance à l'entrée décodée. Le décodage ne sert
+        // qu'à suivre le contenu, jamais à « rattraper » des octets non
+        // canoniques.
+        let canon = to_canonical_bytes(&entry)
+            .map_err(|e| format!("{} : ré-encodage impossible ({e})", path.display()))?;
+        if canon != bytes {
+            return Err(non_canonical_message(&path.display().to_string()));
+        }
         entries.push(entry);
     }
     if entries.is_empty() {
@@ -105,12 +120,16 @@ fn run(dir: &Path) -> Result<String, String> {
         ));
     }
 
-    let snapshots: BTreeMap<BlobHash, Snapshot> = read_hash_dir(&dir.join("snapshots"), |b| {
-        from_canonical_bytes(b).map_err(|e| e.to_string())
-    })?;
-    let blobs: BTreeMap<BlobHash, Blob> = read_hash_dir(&dir.join("blobs"), |b| {
-        from_canonical_bytes(b).map_err(|e| e.to_string())
-    })?;
+    let snapshots: BTreeMap<BlobHash, Snapshot> = read_hash_dir(
+        &dir.join("snapshots"),
+        |b| from_canonical_bytes(b).map_err(|e| e.to_string()),
+        |v| to_canonical_bytes(v).map_err(|e| e.to_string()),
+    )?;
+    let blobs: BTreeMap<BlobHash, Blob> = read_hash_dir(
+        &dir.join("blobs"),
+        |b| from_canonical_bytes(b).map_err(|e| e.to_string()),
+        |v| to_canonical_bytes(v).map_err(|e| e.to_string()),
+    )?;
 
     let export = Export {
         entries,
@@ -186,9 +205,18 @@ fn date(t: constat_model::Timestamp) -> String {
 /// Lit un répertoire d'objets adressés par contenu : chaque fichier doit se
 /// nommer `<64 caractères hexadécimaux>.cbor`. Un répertoire absent vaut un
 /// répertoire vide (un journal peut ne référencer aucun objet).
+///
+/// `decode` transforme les octets bruts en objet, `encode` ré-encode l'objet
+/// canoniquement. Le nom du fichier EST `blake3(octets du fichier)`
+/// (FORMAT.md §1) ; `verify_export` contrôle cette égalité via
+/// `hash_canonical(objet)` = `blake3(encode(objet))`, ce qui n'est fidèle que
+/// si les octets lus SONT canoniques. On l'exige ici : `encode(decode(b)) == b`.
+/// Sinon `blake3(octets bruts) ≠ nom` pour tout vérificateur tiers conforme
+/// à FORMAT.md, et le fichier est rejeté.
 fn read_hash_dir<T>(
     dir: &Path,
     decode: impl Fn(&[u8]) -> Result<T, String>,
+    encode: impl Fn(&T) -> Result<Vec<u8>, String>,
 ) -> Result<BTreeMap<BlobHash, T>, String> {
     let mut out = BTreeMap::new();
     if !dir.exists() {
@@ -218,9 +246,29 @@ fn read_hash_dir<T>(
             .map_err(|e| format!("lecture de {} impossible : {e}", path.display()))?;
         let value: T =
             decode(&bytes).map_err(|e| format!("{} : contenu illisible ({e})", path.display()))?;
+        // Octets canoniques exigés : cf. rustdoc ci-dessus et FORMAT.md §1.
+        let canon = encode(&value)
+            .map_err(|e| format!("{} : ré-encodage impossible ({e})", path.display()))?;
+        if canon != bytes {
+            return Err(non_canonical_message(&path.display().to_string()));
+        }
         out.insert(BlobHash(hash), value);
     }
     Ok(out)
+}
+
+/// Message d'échec pour un fichier dont les octets ne sont pas l'encodage CBOR
+/// canonique de leur contenu. Un tel fichier a `blake3(octets bruts) ≠ nom` :
+/// un vérificateur tiers qui hache directement les octets du fichier
+/// (FORMAT.md §1) le rejette, donc nous aussi — deux vérificateurs conformes
+/// doivent rendre le même verdict.
+fn non_canonical_message(file: &str) -> String {
+    format!(
+        "{file} : octets CBOR non canoniques — blake3(octets du fichier) ne \
+         correspond pas à l'empreinte annoncée. Un vérificateur tiers conforme \
+         à FORMAT.md §1, qui hache directement les octets bruts, rejette ce \
+         fichier ; l'export est refusé."
+    )
 }
 
 /// Décodage hexadécimal de 64 caractères vers 32 octets, à la main : pas de

@@ -21,11 +21,34 @@
 //! `Content-Length` obligatoire et borné ([`MAX_BODY_BYTES`]). Tout le reste
 //! est refusé : mauvais chemin → `404`, mauvaise méthode → `405`, longueur
 //! absente → `411`, taille délirante → `413`, en-tête malformé → `400`.
+//!
+//! # Disponibilité : un thread par connexion, mais borné
+//!
+//! Le modèle reste **un thread par connexion**, sans runtime async (ADR 003) :
+//! ce n'est pas un serveur haute charge. Mais il ne doit pas non plus
+//! s'effondrer sous un flot modeste de connexions — fussent-elles ouvertes
+//! seulement pour occuper des threads pendant la poignée de main jusqu'au
+//! délai d'expiration. Deux garde-fous, en `std` pur :
+//!
+//! - le nombre de connexions traitées **simultanément** est borné
+//!   ([`DEFAULT_MAX_CONNECTIONS`], réglable par `--max-connections` /
+//!   [`Server::with_max_connections`]) : au-delà, l'acceptation **attend
+//!   qu'un créneau se libère** au lieu d'empiler les threads sans limite ;
+//! - chaque connexion est coupée au bout de [`IO_TIMEOUT`], **dès la poignée
+//!   de main** — une connexion qui ne parle jamais ne retient donc un créneau
+//!   que 30 s au plus, et l'acceptation n'est jamais gelée indéfiniment.
+//!
+//! Conséquence : un flot de connexions n'obtient au pire qu'une mise en file
+//! d'attente (le backlog d'`accept` du système), jamais un épuisement des
+//! threads ou de la mémoire. L'impact d'un tel flot se limite à la
+//! disponibilité — §17 tient intégralement : aucune réponse n'est jamais autre
+//! chose qu'un accusé sans contenu exécutable, il n'existe aucun chemin de
+//! retour vers le parc.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use constat_model::{from_canonical_bytes, to_canonical_bytes};
@@ -51,10 +74,76 @@ const MAX_HEAD_BYTES: usize = 16 * 1024;
 /// retient pas un thread indéfiniment.
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Nombre de connexions traitées **simultanément** par défaut.
+///
+/// Ce n'est pas un serveur haute charge (ADR 003 : un thread par connexion,
+/// pas de runtime async) ; cette borne évite qu'un flot de connexions —
+/// même seulement ouvertes pour occuper des threads jusqu'au [`IO_TIMEOUT`] —
+/// n'épuise threads et mémoire. Au-delà, l'acceptation attend qu'un créneau se
+/// libère (chaque connexion est bornée par [`IO_TIMEOUT`], un créneau se
+/// libère donc toujours). Ajustable via `--max-connections` / [`Server::with_max_connections`].
+pub const DEFAULT_MAX_CONNECTIONS: usize = 64;
+
 /// Le magasin partagé entre les threads de connexion. Multi-agents : le
 /// receveur range chaque poussée dans le journal nommé de la clé de l'agent
 /// ([`constat_store::MultiJournalStore`]).
 pub type SharedStore = Arc<Mutex<dyn MultiJournalStore + Send>>;
+
+/// Sémaphore maison bornant le nombre de connexions traitées **simultanément**
+/// — `std` seul, aucune dépendance (ADR 003).
+///
+/// Le compteur est le nombre de créneaux **libres**. [`ConnectionLimiter::acquire`]
+/// bloque tant qu'il n'en reste aucun ; chaque connexion étant bornée par
+/// [`IO_TIMEOUT`] (appliqué dès la poignée de main, cf. [`handle_connection`]),
+/// un créneau finit toujours par se libérer — l'acceptation n'est jamais gelée
+/// indéfiniment. Le [`Permit`] rend son créneau à sa destruction (fin du thread
+/// de connexion), même en cas de panique du handler.
+#[derive(Clone)]
+struct ConnectionLimiter {
+    inner: Arc<(Mutex<usize>, Condvar)>,
+}
+
+impl ConnectionLimiter {
+    fn new(max: usize) -> Self {
+        // Au moins un créneau : `--max-connections 0` ne doit pas figer le
+        // serveur (aucune connexion ne serait jamais traitée).
+        let max = max.max(1);
+        Self {
+            inner: Arc::new((Mutex::new(max), Condvar::new())),
+        }
+    }
+
+    /// Réserve un créneau, en attendant qu'il s'en libère un si le serveur est
+    /// saturé. Un verrou empoisonné (handler ayant paniqué) est récupéré : le
+    /// bornage ne doit jamais devenir un point de panne.
+    fn acquire(&self) -> Permit {
+        let (lock, cvar) = &*self.inner;
+        let mut free = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while *free == 0 {
+            free = cvar.wait(free).unwrap_or_else(|e| e.into_inner());
+        }
+        *free -= 1;
+        Permit {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+/// Un créneau de connexion réservé. Rend son créneau (et réveille un
+/// acquéreur en attente) à sa destruction — y compris si le thread de
+/// connexion panique.
+struct Permit {
+    inner: Arc<(Mutex<usize>, Condvar)>,
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let (lock, cvar) = &*self.inner;
+        let mut free = lock.lock().unwrap_or_else(|e| e.into_inner());
+        *free += 1;
+        cvar.notify_one();
+    }
+}
 
 /// Erreurs de démarrage et de configuration de l'écouteur.
 #[derive(Debug, thiserror::Error, miette::Diagnostic)]
@@ -142,6 +231,9 @@ pub struct Server {
     /// Politique d'autorisation des clés d'agents ([`AgentPolicy::Tofu`]
     /// par défaut ; allowlist via [`Server::with_policy`]).
     policy: Arc<AgentPolicy>,
+    /// Nombre de connexions traitées simultanément ([`DEFAULT_MAX_CONNECTIONS`]
+    /// par défaut ; ajustable via [`Server::with_max_connections`]).
+    max_connections: usize,
 }
 
 impl Server {
@@ -162,6 +254,7 @@ impl Server {
             tls,
             store,
             policy: Arc::new(AgentPolicy::Tofu),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         })
     }
 
@@ -174,22 +267,56 @@ impl Server {
         self
     }
 
+    /// Borne le nombre de connexions traitées **simultanément** (défaut
+    /// [`DEFAULT_MAX_CONNECTIONS`]). Au-delà, l'acceptation attend qu'un
+    /// créneau se libère plutôt que de multiplier les threads sans limite —
+    /// un flot de connexions ne peut donc pas épuiser threads et mémoire.
+    /// `0` est ramené à `1` (une valeur nulle figerait le serveur).
+    #[must_use]
+    pub fn with_max_connections(mut self, max: usize) -> Self {
+        self.max_connections = max.max(1);
+        self
+    }
+
     /// L'adresse effectivement liée.
     pub fn local_addr(&self) -> Result<SocketAddr, ServeError> {
         Ok(self.listener.local_addr()?)
     }
 
     /// Sert indéfiniment : un thread `std::thread` par connexion, aucun
-    /// runtime. Une connexion en erreur est journalisée et n'affecte pas
-    /// les autres.
+    /// runtime (ADR 003). Une connexion en erreur est journalisée et n'affecte
+    /// pas les autres.
+    ///
+    /// Le nombre de connexions traitées **simultanément** est borné
+    /// ([`Server::with_max_connections`], défaut [`DEFAULT_MAX_CONNECTIONS`]) :
+    /// avant de lancer un thread, l'acceptation **réserve un créneau** et
+    /// attend s'il n'en reste aucun. Comme chaque connexion est coupée au bout
+    /// de [`IO_TIMEOUT`] (y compris une connexion qui ne parle jamais, le délai
+    /// s'appliquant dès la poignée de main TLS), un créneau finit toujours par
+    /// se libérer : un flot de connexions n'épuise ni les threads ni la
+    /// mémoire, et n'obtient au pire qu'une mise en file d'attente — jamais un
+    /// effondrement. Ce n'est pas un serveur haute charge ; c'est un serveur
+    /// qui ne s'effondre pas sous un flot modeste.
     pub fn run(self) -> ! {
+        let limiter = ConnectionLimiter::new(self.max_connections);
         loop {
             match self.listener.accept() {
                 Ok((sock, _peer)) => {
+                    // Réserve un créneau AVANT de lancer le thread : au-delà de
+                    // la borne, on attend ici qu'une connexion en cours se
+                    // termine (bornée par IO_TIMEOUT) plutôt que d'empiler les
+                    // threads. Les connexions surnuméraires patientent dans le
+                    // backlog d'`accept` du système.
+                    let permit = limiter.acquire();
                     let tls = Arc::clone(&self.tls);
                     let store = Arc::clone(&self.store);
                     let policy = Arc::clone(&self.policy);
-                    std::thread::spawn(move || handle_connection(sock, tls, &store, &policy));
+                    std::thread::spawn(move || {
+                        // Le créneau est rendu à la fin du thread (y compris en
+                        // cas de panique du handler), réveillant un acquéreur.
+                        let _permit = permit;
+                        handle_connection(sock, tls, &store, &policy);
+                    });
                 }
                 Err(e) => eprintln!("constat-server : connexion non acceptée : {e}"),
             }
@@ -205,6 +332,11 @@ fn handle_connection(
     store: &SharedStore,
     policy: &AgentPolicy,
 ) {
+    // Le délai est posé AVANT toute I/O : la poignée de main TLS est menée
+    // paresseusement à la première lecture de `read_request`, donc ce timeout
+    // la couvre. Une connexion qui négocie le TLS mais ne parle jamais — ou ne
+    // le négocie même pas — est coupée au bout d'IO_TIMEOUT, libérant son
+    // créneau de connexion (voir `Server::run`).
     let _ = sock.set_read_timeout(Some(IO_TIMEOUT));
     let _ = sock.set_write_timeout(Some(IO_TIMEOUT));
     let conn = match rustls::ServerConnection::new(tls) {
@@ -475,5 +607,50 @@ mod tests {
     fn ligne_de_requete_malformee_400() {
         let err = request_of(b"n'importe quoi\r\n\r\n").unwrap_err();
         assert_eq!(status_of(&err.unwrap()), 400);
+    }
+
+    /// Le bornage tient la concurrence sous la limite et ne s'interbloque
+    /// pas : 20 « connexions » pour 3 créneaux — jamais plus de 3 en vol à la
+    /// fois, et toutes finissent par passer (les créneaux se libèrent).
+    #[test]
+    fn le_bornage_limite_la_concurrence_sans_interblocage() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let max = 3;
+        let limiter = ConnectionLimiter::new(max);
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..20 {
+            let limiter = limiter.clone();
+            let live = Arc::clone(&live);
+            let peak = Arc::clone(&peak);
+            handles.push(std::thread::spawn(move || {
+                let _permit = limiter.acquire();
+                let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(5));
+                live.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(
+            peak.load(Ordering::SeqCst) <= max,
+            "concurrence maximale observée {} > borne {max}",
+            peak.load(Ordering::SeqCst)
+        );
+        assert_eq!(live.load(Ordering::SeqCst), 0, "des créneaux ont fui");
+    }
+
+    /// Une borne nulle (`--max-connections 0`) est ramenée à 1 : le serveur
+    /// traite les connexions une par une, il ne se fige jamais.
+    #[test]
+    fn borne_nulle_ramenee_a_un() {
+        let limiter = ConnectionLimiter::new(0);
+        let permit = limiter.acquire(); // un créneau existe
+        drop(permit);
+        let _second = limiter.acquire(); // et se réutilise, pas d'interblocage
     }
 }

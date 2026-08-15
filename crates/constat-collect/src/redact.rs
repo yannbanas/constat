@@ -7,6 +7,8 @@
 //! | Blocs PEM `-----BEGIN … PRIVATE KEY-----` | bloc entier remplacé par `[EXPURGÉ:cle-privee]` |
 //! | Hachages `crypt(3)` modulaires (`$6$…`, `$y$…`, `$2b$…`, …) | sel et empreinte remplacés, seul `$id$` (l'algorithme) est conservé |
 //! | Valeurs de `password=` / `passwd:` / `secret=` / `token=` … | valeur remplacée par un marqueur typé |
+//! | Identifiants dans une URI (`scheme://user:secret@host`) | userinfo remplacé par `[EXPURGÉ:identifiants-uri]` (voir [`redact_uri_credentials`]) |
+//! | Secrets positionnels en option (`-pXXX`, `--password XXX`) | valeur remplacée par un marqueur (voir [`redact_option_secrets`]) |
 //! | Longues chaînes base64 dans un contexte sensible | remplacées par `[EXPURGÉ:base64]` |
 //! | Configurations réseau (FortiGate, Cisco IOS, XML) | motifs dédiés : voir [`redact_network_config`] |
 //!
@@ -43,6 +45,8 @@ pub const MARKER_BASE64: &str = "[EXPURGÉ:base64]";
 pub const MARKER_SNMP_COMMUNITY: &str = "[EXPURGÉ:communauté-snmp]";
 /// Marqueur : clé partagée (PSK IPsec, clé TACACS/RADIUS, `key-string`…).
 pub const MARKER_SHARED_KEY: &str = "[EXPURGÉ:cle-partagee]";
+/// Marqueur : identifiants dans une URI / chaîne de connexion (`user:pass@`).
+pub const MARKER_URI_CREDENTIALS: &str = "[EXPURGÉ:identifiants-uri]";
 
 /// Empreinte BLAKE3 d'un secret : la présence reste prouvable, jamais le contenu.
 pub fn fingerprint(secret: &[u8]) -> Value {
@@ -109,9 +113,12 @@ pub fn redact_text(text: &str) -> String {
     out
 }
 
-/// Expurge une seule ligne : valeurs de clefs sensibles, hachages, base64.
+/// Expurge une seule ligne : identifiants d'URI, valeurs de clefs sensibles,
+/// secrets positionnels en option, hachages, base64.
 fn redact_line(line: &str) -> String {
     let line = redact_sensitive_kv(line);
+    let line = redact_uri_credentials(&line);
+    let line = redact_option_secrets(&line);
     let line = redact_crypt_hashes(&line);
     redact_base64_in_sensitive_context(&line)
 }
@@ -252,6 +259,202 @@ fn redact_sensitive_kv(line: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Identifiants dans une URI / chaîne de connexion (scheme://user:secret@host)
+// ---------------------------------------------------------------------------
+//
+// Une chaîne de connexion (`postgres://appuser:S3cr3t@db:5432/prod`,
+// `mongodb://…`, `redis://…`, `amqp://…`, `https://user:pass@host`,
+// `ldap://…`) transporte le secret dans le *userinfo* de l'autorité, sans
+// aucun délimiteur `=`/`:` qu'une clef sensible précéderait, et souvent en
+// dessous du seuil base64. La liste de refus générique ne le voyait pas.
+// Cette passe, appliquée à TOUTES les lignes de TOUS les collecteurs, détecte
+// `schéma://[user[:secret]@]` et expurge le userinfo — quelle que soit la
+// clef à gauche. Une URL SANS userinfo (`https://host:8443/chemin`) est
+// laissée intacte : port, hôte et chemin sont des faits d'audit légitimes.
+
+/// Un caractère peut-il faire partie d'un schéma d'URI (RFC 3986 :
+/// `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`) ?
+fn is_scheme_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'+' || c == b'-' || c == b'.'
+}
+
+/// Un caractère termine-t-il l'autorité d'une URI (début du chemin, de la
+/// requête, du fragment, ou simple séparateur de jeton) ?
+fn ends_authority(c: char) -> bool {
+    c == '/' || c == '?' || c == '#' || c == '\\' || c == '"' || c == '\'' || c.is_whitespace()
+}
+
+/// Remplace le userinfo de toute URI `schéma://[user[:secret]@]host…` par
+/// [`MARKER_URI_CREDENTIALS`]. Quand un mot de passe est présent (`user:secret@`)
+/// l'utilisateur est conservé (donnée d'audit : sous quel compte le service se
+/// connecte) et seul le secret part ; quand le userinfo est un jeton unique
+/// (`token@host`) il part en entier. Sans userinfo, l'URL est intacte.
+/// Multi-occurrences sur une même ligne. Ne panique jamais.
+fn redact_uri_credentials(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // repérer "://"
+        if bytes[i] == b':' && line[i..].starts_with("://") {
+            // schéma = suite de caractères de schéma à gauche du ':'
+            let scheme_start = line[..i]
+                .char_indices()
+                .rev()
+                .take_while(|(_, c)| c.is_ascii() && is_scheme_char(*c as u8))
+                .last()
+                .map(|(p, _)| p);
+            // premier caractère du schéma doit être une lettre (RFC 3986)
+            let scheme_ok = scheme_start.is_some_and(|s| {
+                line[s..]
+                    .bytes()
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphabetic())
+                    && s < i
+            });
+            let authority_start = i + 3; // après "://"
+            if scheme_ok && authority_start <= bytes.len() {
+                // fin de l'autorité
+                let auth_rel = line[authority_start..]
+                    .find(ends_authority)
+                    .unwrap_or(line.len() - authority_start);
+                let authority = &line[authority_start..authority_start + auth_rel];
+                if let Some(at) = authority.find('@') {
+                    let userinfo = &authority[..at];
+                    // `out` contient déjà tout jusqu'au ':' courant : n'émettre
+                    // que le "://" puis, si un secret est présent, "user:"
+                    out.push_str(&line[i..authority_start]);
+                    match userinfo.find(':') {
+                        Some(colon) => {
+                            out.push_str(&userinfo[..=colon]); // "user:"
+                        }
+                        None => { /* userinfo entier = jeton : tout part */ }
+                    }
+                    out.push_str(MARKER_URI_CREDENTIALS);
+                    // reprendre au '@'
+                    i = authority_start + at;
+                    out.push_str(&line[i..=i]); // le '@'
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        let ch_len = utf8_char_len(bytes[i]);
+        let end = (i + ch_len).min(bytes.len());
+        if let Some(s) = line.get(i..end) {
+            out.push_str(s);
+        }
+        i = end;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Secrets positionnels en option de ligne de commande
+// ---------------------------------------------------------------------------
+//
+// Certains secrets voyagent comme argument d'une option, sans `=` :
+// `mysqldump -pMotDePasse` (court, collé) ou `--password MotDePasse` (long,
+// séparé par un espace). La forme `--password=…` est déjà couverte par la
+// liste de refus générique (`redact_sensitive_kv`) ; ces deux formes-ci ne
+// l'étaient pas. Appliquée à toutes les lignes, cette passe couvre le blob ET
+// les faits dérivés (`service.exec_start`, `service.image_path`).
+//
+// **Options traitées** (documenté) :
+// - court collé : `-p<valeur>` (mot de passe MySQL/MariaDB/…),
+//   `-w<valeur>` (mot de passe de liaison LDAP). Seule la forme *collée* est
+//   traitée : `-p <valeur>` séparé désigne, selon l'outil, une base de données
+//   et non le secret — on n'y touche pas.
+// - long séparé par un espace : `--password`, `--pass`, `--passwd`,
+//   `--token`, `--secret`, `--api-key`, `--apikey`, `--credential`,
+//   `--credentials`. La valeur (jeton suivant) est expurgée si elle ne commence
+//   pas par `-` (protège la forme interactive `--password` suivie d'un autre
+//   drapeau, sans valeur).
+//
+// **Limite documentée** : `-p<port>` collé (`redis-cli -p6379`) est expurgé à
+// tort — impossible de distinguer un port d'un mot de passe sur la seule
+// lettre `p`. Conforme à la règle « en cas de doute, sur-expurger » (§7.2) :
+// perdre un numéro de port est un désagrément, laisser fuir un secret est la
+// faute impardonnable.
+
+/// Options courtes collées `-x<valeur>` portant un secret, avec leur marqueur.
+const SHORT_GLUED_SECRET_OPTS: &[(&str, &str)] =
+    &[("-p", MARKER_PASSWORD), ("-w", MARKER_PASSWORD)];
+
+/// Options longues `--xxx <valeur>` (séparées par un espace) portant un secret.
+const LONG_SPACED_SECRET_OPTS: &[(&str, &str)] = &[
+    ("--password", MARKER_PASSWORD),
+    ("--passwd", MARKER_PASSWORD),
+    ("--pass", MARKER_PASSWORD),
+    ("--token", MARKER_TOKEN),
+    ("--secret", MARKER_SECRET),
+    ("--api-key", MARKER_SECRET),
+    ("--apikey", MARKER_SECRET),
+    ("--credentials", MARKER_SECRET),
+    ("--credential", MARKER_SECRET),
+];
+
+/// Pour une option courte collée `-x<valeur>` (`-pXXX`), retourne
+/// `(longueur de l'option, marqueur)` ; `None` sinon.
+fn short_glued_opt(token: &str) -> Option<(usize, &'static str)> {
+    if token.starts_with("--") {
+        return None;
+    }
+    SHORT_GLUED_SECRET_OPTS
+        .iter()
+        .find(|(opt, _)| token.starts_with(opt) && token.len() > opt.len())
+        .map(|(opt, m)| (opt.len(), *m))
+}
+
+/// Expurge les secrets positionnels en option d'une ligne (voir la
+/// documentation de section). Préserve l'espacement d'origine. Ne panique jamais.
+fn redact_option_secrets(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    // marqueur en attente : le prochain jeton est la valeur d'une option longue
+    let mut pending: Option<&'static str> = None;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_whitespace() {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let token = &line[start..i];
+        if let Some(marker) = pending.take() {
+            // valeur d'une option longue séparée : expurgée sauf si c'est un
+            // autre drapeau (forme interactive sans valeur)
+            if token.starts_with('-') {
+                out.push_str(token);
+            } else {
+                out.push_str(marker);
+            }
+            continue;
+        }
+        if let Some((opt_len, marker)) = short_glued_opt(token) {
+            out.push_str(&token[..opt_len]);
+            out.push_str(marker);
+            continue;
+        }
+        let token_lower = token.to_ascii_lowercase();
+        if let Some((_, marker)) = LONG_SPACED_SECRET_OPTS
+            .iter()
+            .find(|(opt, _)| token_lower == *opt)
+        {
+            out.push_str(token);
+            pending = Some(marker);
+            continue;
+        }
+        out.push_str(token);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Hachages crypt(3) modulaires ($id$sel$empreinte)
 // ---------------------------------------------------------------------------
 
@@ -338,6 +541,17 @@ const SENSITIVE_CONTEXT_WORDS: &[&str] = &[
 ];
 
 /// Longueur minimale d'une séquence base64 jugée suspecte.
+///
+/// **Seuil délibérément conservateur (40)** — décision documentée plutôt que
+/// masquée. L'abaisser attraperait davantage de secrets courts, mais au prix
+/// de faux positifs sur des sommes de contrôle légitimes (empreintes SHA-256
+/// de 64 hex, fingerprints de certificats, identifiants base64 de 32–40 c.)
+/// qui DOIVENT rester : ce sont des faits d'audit. Les fuites courtes réelles
+/// remontées par la revue (identifiants d'URI sous le seuil, secrets
+/// positionnels en option) sont désormais couvertes par des passes DÉDIÉES
+/// ([`redact_uri_credentials`], [`redact_option_secrets`]) qui n'ont pas ce
+/// dilemme entropie/longueur. Abaisser ce seuil n'apporterait donc que des
+/// faux positifs : il reste à 40, et cette limite est explicite.
 const BASE64_MIN_LEN: usize = 40;
 
 fn is_base64_char(c: u8) -> bool {
@@ -632,32 +846,82 @@ fn xml_sensitive_marker(tag: &str) -> Option<&'static str> {
     sensitive_marker(&local)
 }
 
-/// Nom de la première balise ouvrante `<tag …>` de la ligne, avec la
-/// position d'octet juste après son `>`, hors balises fermantes,
-/// auto-fermantes, commentaires et déclarations.
-fn first_opening_tag(line: &str) -> Option<(String, usize)> {
-    let mut search_from = 0;
-    while let Some(rel) = line.get(search_from..)?.find('<') {
-        let open = search_from + rel;
-        let rest = line.get(open + 1..)?;
-        if rest.starts_with(['/', '?', '!']) {
-            search_from = open + 1;
+/// Expurge le contenu de TOUTES les balises sensibles d'une ligne, quelle que
+/// soit leur position (pas seulement la première) et en nombre quelconque :
+/// `<user><password>x</password><apikey>y</apikey></user>` voit `x` ET `y`
+/// partir. Descend dans les balises non sensibles pour y trouver d'éventuelles
+/// balises sensibles imbriquées.
+///
+/// Retourne `Some((ligne expurgée, élément ouvert))` si au moins une balise
+/// sensible a été traitée — `élément ouvert` porte le nom d'un élément sensible
+/// dont la fermeture n'est pas sur cette ligne (contenu multi-lignes à
+/// poursuivre par l'appelant). Retourne `None` si la ligne ne contient aucune
+/// balise sensible (l'appelant applique alors les autres règles). Ne panique jamais.
+fn redact_xml_sensitive_tags(line: &str) -> Option<(String, Option<String>)> {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    let mut did = false;
+    loop {
+        let Some(lt) = rest.find('<') else {
+            out.push_str(rest);
+            break;
+        };
+        let after_lt = &rest[lt + 1..];
+        // fermante / déclaration / commentaire / PI : émis tels quels
+        if after_lt.starts_with(['/', '?', '!']) {
+            out.push_str(&rest[..lt + 1]);
+            rest = after_lt;
             continue;
         }
-        let close_rel = rest.find('>')?;
-        let inner = &rest[..close_rel];
+        let Some(gt_rel) = after_lt.find('>') else {
+            out.push_str(rest); // balise jamais refermée : rien de plus à faire
+            break;
+        };
+        let inner = &after_lt[..gt_rel];
+        let tag_end = lt + 1 + gt_rel + 1; // position après le '>'
         if inner.ends_with('/') {
-            search_from = open + 1 + close_rel + 1;
-            continue; // auto-fermante : pas de contenu
+            out.push_str(&rest[..tag_end]); // auto-fermante : pas de contenu
+            rest = &rest[tag_end..];
+            continue;
         }
         let name: String = inner.chars().take_while(|c| !c.is_whitespace()).collect();
         if name.is_empty() {
-            search_from = open + 1;
+            out.push_str(&rest[..lt + 1]);
+            rest = after_lt;
             continue;
         }
-        return Some((name, open + 1 + close_rel + 1));
+        // balise ouvrante : émise verbatim
+        out.push_str(&rest[..tag_end]);
+        let content_and_after = &rest[tag_end..];
+        match xml_sensitive_marker(&name) {
+            Some(marker) => {
+                did = true;
+                let closing = format!("</{name}");
+                match content_and_after.find(&closing) {
+                    Some(crel) => {
+                        if crel > 0 {
+                            out.push_str(marker); // contenu non vide : expurgé
+                        } // contenu vide : honnête, rien inséré
+                        rest = &content_and_after[crel..]; // reprendre à la fermeture
+                    }
+                    None => {
+                        // élément ouvert : contenu multi-lignes, tout part
+                        out.push_str(marker);
+                        return Some((out, Some(name)));
+                    }
+                }
+            }
+            None => {
+                // balise non sensible : descendre dans son contenu
+                rest = content_and_after;
+            }
+        }
     }
-    None
+    if did {
+        Some((out, None))
+    } else {
+        None
+    }
 }
 
 /// Expurge la configuration d'UN équipement réseau : blocs PEM d'abord
@@ -688,29 +952,12 @@ pub fn redact_network_config(text: &str) -> String {
             out.push(redacted);
             continue;
         }
-        if let Some((tag, content_start)) = first_opening_tag(line) {
-            if let Some(marker) = xml_sensitive_marker(&tag) {
-                let closing = format!("</{tag}");
-                let head = line.get(..content_start).unwrap_or("");
-                match line.get(content_start..).and_then(|r| r.find(&closing)) {
-                    Some(rel) => {
-                        // <tag>secret</tag> sur une seule ligne
-                        let close_abs = content_start + rel;
-                        let tail = line.get(close_abs..).unwrap_or("");
-                        if close_abs > content_start {
-                            out.push(format!("{head}{marker}{tail}"));
-                        } else {
-                            out.push(line.to_string()); // contenu vide : honnête
-                        }
-                    }
-                    None => {
-                        // élément ouvert sans fermeture : contenu multi-lignes
-                        out.push(format!("{head}{marker}"));
-                        open_xml = Some(tag);
-                    }
-                }
-                continue;
+        if let Some((redacted, opened)) = redact_xml_sensitive_tags(line) {
+            out.push(redacted);
+            if let Some(tag) = opened {
+                open_xml = Some(tag);
             }
+            continue;
         }
         out.push(redact_fortigate_enc_values(line));
     }
@@ -857,6 +1104,80 @@ mod tests {
         // hors contexte sensible, une longue chaîne est conservée
         let neutre = "checksum AAAAB3NzaC1yc2EAAAADAQABAAABgQC7vbqajDhA1234567890";
         assert!(redact_text(neutre).contains("AAAAB3NzaC1yc2EA"));
+    }
+
+    #[test]
+    fn uri_identifiants_expurges_structure_conservee() {
+        // mot de passe dans le userinfo : l'utilisateur reste, le secret part
+        assert_eq!(
+            redact_text("DATABASE_URL=postgres://appuser:S3cr3tP4ss@db.internal:5432/prod"),
+            format!(
+                "DATABASE_URL=postgres://appuser:{MARKER_URI_CREDENTIALS}@db.internal:5432/prod"
+            )
+        );
+        // schémas variés
+        for scheme in ["mongodb", "redis", "amqp", "https", "ldap"] {
+            let uri = format!("x={scheme}://u:motdepasse@h:1/p");
+            let out = redact_text(&uri);
+            assert!(!out.contains("motdepasse"), "{scheme} : {out}");
+            assert!(out.contains(MARKER_URI_CREDENTIALS), "{scheme} : {out}");
+        }
+        // userinfo sans mot de passe (jeton unique) : tout part
+        assert_eq!(
+            redact_text("git clone https://ghp_secrettoken@github.com/o/r.git"),
+            format!("git clone https://{MARKER_URI_CREDENTIALS}@github.com/o/r.git")
+        );
+        // URL SANS userinfo : intacte (port, hôte, chemin sont des faits)
+        assert_eq!(
+            redact_text("https://depot.interne:8443/chemin/paquet.deb"),
+            "https://depot.interne:8443/chemin/paquet.deb"
+        );
+        // deux URI sur une même ligne
+        let deux = redact_text("a=redis://:p1@h1 b=amqp://u:p2@h2");
+        assert!(!deux.contains("p1") && !deux.contains("p2"), "{deux}");
+    }
+
+    #[test]
+    fn option_positionnelle_secret_expurge() {
+        // court collé -p
+        assert_eq!(
+            redact_text("/usr/bin/mysqldump -pMotDePasseProd --databases prod"),
+            format!("/usr/bin/mysqldump -p{MARKER_PASSWORD} --databases prod")
+        );
+        // long séparé par un espace
+        assert_eq!(
+            redact_text("tool --password MotDePasse --verbose"),
+            format!("tool --password {MARKER_PASSWORD} --verbose")
+        );
+        assert_eq!(
+            redact_text("tool --token abc123 suite"),
+            format!("tool --token {MARKER_TOKEN} suite")
+        );
+        // forme interactive : --password suivi d'un autre drapeau, pas de valeur
+        assert_eq!(
+            redact_text("mysql -u root --password --batch"),
+            "mysql -u root --password --batch"
+        );
+        // -p seul (forme interactive / prompt) : pas de valeur collée, intact
+        assert_eq!(
+            redact_text("mysql -u root -p base"),
+            "mysql -u root -p base"
+        );
+    }
+
+    #[test]
+    fn xml_compact_balises_multiples_toutes_expurgees() {
+        assert_eq!(
+            redact_network_config(
+                "<user><password>ChangeMe1!</password><apikey>Zk9secret</apikey></user>"
+            ),
+            format!("<user><password>{MARKER_PASSWORD}</password><apikey>{MARKER_SECRET}</apikey></user>")
+        );
+        // balise sensible non-première, précédée d'une balise non sensible
+        assert_eq!(
+            redact_network_config("<row><name>x</name><secret>fui</secret></row>"),
+            format!("<row><name>x</name><secret>{MARKER_SECRET}</secret></row>")
+        );
     }
 
     #[test]

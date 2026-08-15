@@ -66,6 +66,14 @@ enum Command {
         /// (TOFU), chaque clé restant verrouillée sur son propre journal.
         #[arg(long, value_name = "FICHIER")]
         allowed_agents: Option<PathBuf>,
+        /// Nombre de connexions traitées SIMULTANÉMENT (défaut : 64). Ce
+        /// n'est pas un serveur haute charge (un thread par connexion) mais
+        /// cette borne évite qu'un flot de connexions n'épuise threads et
+        /// mémoire : au-delà, l'acceptation attend qu'un créneau se libère
+        /// (chaque connexion est coupée après 30 s). À augmenter si un parc
+        /// nombreux pousse en rafales.
+        #[arg(long, value_name = "N", default_value_t = serve::DEFAULT_MAX_CONNECTIONS)]
+        max_connections: usize,
     },
     /// Liste les journaux du magasin : clé d'agent abrégée, nombre
     /// d'entrées, date de la dernière entrée, racine — l'inventaire
@@ -221,6 +229,7 @@ fn main() -> miette::Result<()> {
             client_ca,
             store,
             allowed_agents,
+            max_connections,
         } => {
             let config = validate(listen, cert, key, client_ca, store)?;
 
@@ -242,7 +251,9 @@ fn main() -> miette::Result<()> {
             })?;
             let shared: serve::SharedStore = Arc::new(Mutex::new(store));
 
-            let server = serve::Server::bind(&config.listen, tls, shared)?.with_policy(policy);
+            let server = serve::Server::bind(&config.listen, tls, shared)?
+                .with_policy(policy)
+                .with_max_connections(max_connections);
             let addr = server
                 .local_addr()
                 .map(|a| a.to_string())
@@ -253,8 +264,9 @@ fn main() -> miette::Result<()> {
             };
             eprintln!(
                 "constat-server en écoute sur {addr} — magasin {} — mTLS exigé \
-                 (autorité des agents : {}) — {regime}. Réception uniquement : \
-                 ce serveur n'initie jamais de connexion vers le parc (§17).",
+                 (autorité des agents : {}) — {regime} — {max_connections} connexions \
+                 simultanées au plus. Réception uniquement : ce serveur n'initie \
+                 jamais de connexion vers le parc (§17).",
                 config.store.display(),
                 config.client_ca.display()
             );

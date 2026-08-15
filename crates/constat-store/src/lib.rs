@@ -32,7 +32,7 @@
 //! et sa propre racine. Les méthodes historiques de [`Store`] restent le
 //! journal par défaut, sémantique strictement inchangée.
 
-use constat_model::{Blob, BlobHash, ModelError, Snapshot, Timestamp};
+use constat_model::{Blob, BlobHash, CollectorId, ModelError, Snapshot, Timestamp};
 use serde::{Deserialize, Serialize};
 
 pub mod export;
@@ -62,6 +62,30 @@ pub use signer::Signer;
 // Ré-exports pour que les crates aval (constat-verify, constat-agent, constat-cli)
 // n'aient pas à dépendre directement de ed25519-dalek.
 pub use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+
+/// Préfixe de l'**espace de noms réservé** des collecteurs internes de Constat.
+///
+/// Les blobs de purge ([`purge::PURGE_COLLECTOR`] = `constat.purge`) et de
+/// rotation ([`rotation::ROTATION_COLLECTOR`] = `constat.rotation`) sont les
+/// seuls objets légitimes de cet espace : ils ne sont créés que par les
+/// chemins **signés** de [`purge`] et [`rotation`]. Aucun collecteur de
+/// machine ne doit porter ce préfixe.
+///
+/// Cette constante est la règle partagée dont se servent, en défense en
+/// profondeur, l'agent (à la construction d'une collecte ordinaire) et le
+/// serveur (à la réception d'un lot) pour refuser qu'une collecte usurpe un
+/// collecteur réservé hors du protocole de purge/rotation.
+pub const RESERVED_COLLECTOR_PREFIX: &str = "constat.";
+
+/// Le collecteur `collector` appartient-il à l'espace de noms réservé
+/// ([`RESERVED_COLLECTOR_PREFIX`]) ?
+///
+/// Un blob de cet espace ne peut légitimement provenir que des chemins signés
+/// de [`purge`] et [`rotation`] ; toute autre origine (collecteur ordinaire,
+/// lot poussé) doit être refusée en défense en profondeur.
+pub fn is_reserved_collector(collector: &CollectorId) -> bool {
+    collector.0.starts_with(RESERVED_COLLECTOR_PREFIX)
+}
 
 /// Entrée du journal : empreinte de l'entrée précédente + empreintes de
 /// snapshots + date + signature (§3.3).

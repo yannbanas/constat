@@ -88,6 +88,27 @@ use ed25519_dalek::{Signature, VerifyingKey};
 /// (dans le layout sur disque : le nom hexadécimal du fichier). La vérification
 /// recalcule chaque empreinte et la compare à la clé — c'est ce qui détecte un
 /// fichier altéré.
+///
+/// # Le contrat « blake3(octets du fichier) == nom » (FORMAT.md §1)
+///
+/// Cette structure porte des objets **déjà décodés** : un objet en mémoire n'a
+/// pas d'octets « bruts », seulement son encodage canonique. La vérification
+/// recalcule donc l'empreinte via [`hash_canonical`], qui vaut
+/// `blake3(encodage canonique)`. Pour un objet chargé depuis un fichier, c'est
+/// **fidèle au contrat de FORMAT.md §1** (« blake3 des octets du fichier ») à
+/// **une** condition : que les octets du fichier soient bien l'encodage
+/// canonique de l'objet. ciborium décode sans broncher des octets **non
+/// canoniques** (entier en forme longue, longueur de map non minimale…) qui
+/// représentent pourtant le même objet ; un tel fichier a
+/// `blake3(octets bruts) ≠ nom` et serait rejeté par tout vérificateur tiers
+/// qui hache les octets bruts. C'est pourquoi le **chargeur** (le binaire
+/// `constat-verify`, `main.rs`) exige, pour chaque fichier lu,
+/// `to_canonical_bytes(objet décodé) == octets lus` **avant** de construire
+/// cet `Export` : une fois ici, tout objet est garanti canonique, et
+/// `hash_canonical` est exactement `blake3(octets du fichier)`. Un `Export`
+/// construit en mémoire (tests, autres crates) ne peut, lui, contenir que des
+/// objets canoniques — il n'existe pas de représentation décodée « non
+/// canonique ».
 #[derive(Debug, Clone)]
 pub struct Export {
     /// Entrées du journal, dans l'ordre : la genèse en premier.

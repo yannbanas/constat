@@ -722,4 +722,15 @@ mod tests {
             Err(PurgeError::BadCollector(_))
         ));
     }
+
+    /// Le collecteur de purge appartient à l'espace de noms réservé partagé :
+    /// c'est ce qui permet à l'agent et au serveur de le distinguer d'une
+    /// collecte ordinaire (défense en profondeur).
+    #[test]
+    fn purge_collector_est_reserve() {
+        assert!(PURGE_COLLECTOR.starts_with(crate::RESERVED_COLLECTOR_PREFIX));
+        assert!(crate::is_reserved_collector(&CollectorId(
+            PURGE_COLLECTOR.to_string()
+        )));
+    }
 }

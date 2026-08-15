@@ -18,12 +18,28 @@ export/
     └── <hex>.cbor          un blob par fichier
 ```
 
-- `<hex>` est l'empreinte **BLAKE3** (32 octets) du contenu du fichier,
+- `<hex>` est l'empreinte **BLAKE3** (32 octets) des **octets du fichier**,
   en hexadécimal minuscule (64 caractères).
-- Les fichiers `.cbor` contiennent **exactement** l'encodage CBOR canonique
-  de l'objet — les mêmes octets que ceux qui ont été hachés. Un vérificateur
-  indépendant peut donc hacher directement les octets du fichier, sans
-  décoder, pour contrôler `blobs/` et `snapshots/`.
+- Les fichiers `.cbor` contiennent **exactement** l'encodage CBOR **canonique**
+  de l'objet — les mêmes octets que ceux qui ont été hachés. Le contrôle
+  d'intégrité est donc, mot pour mot : **`BLAKE3(octets du fichier) == nom`**.
+  Un vérificateur indépendant peut hacher **directement les octets du fichier,
+  sans décoder** — c'est la méthode la plus simple et elle suffit sur tout
+  export conforme.
+- **L'encodage canonique est normatif, pas seulement conseillé.** Un fichier
+  dont les octets ne sont **pas** l'encodage canonique de leur contenu
+  (entier en forme longue, longueur de map non minimale, etc.) n'est **pas**
+  conforme, même s'il se décode : il a `BLAKE3(octets) ≠ nom` et un
+  vérificateur qui hache les octets bruts le **rejette**. Un vérificateur qui
+  ne dispose que d'une primitive « BLAKE3 de l'encodage canonique d'un objet »
+  (comme `constat-verify`, bâti sur `constat-model`) obtient le **même verdict**
+  en exigeant les deux conditions équivalentes : (a) le fichier se décode en un
+  objet, (b) **le ré-encodage canonique de cet objet est identique, octet pour
+  octet, aux octets du fichier**, et (c) `BLAKE3(ce ré-encodage) == nom`. Comme
+  (b) impose octets du fichier == encodage canonique, (c) équivaut alors à
+  `BLAKE3(octets du fichier) == nom`. Un fichier non canonique est refusé au
+  point (b) — voir § 3 bis. Le décodage ne sert **qu'à** ce contrôle et à
+  suivre les références ; il ne « répare » jamais des octets non canoniques.
 - Les répertoires `snapshots/` et `blobs/` peuvent être absents s'ils sont
   vides. Les fichiers non référencés par le journal sont tolérés mais leur
   intégrité est tout de même vérifiée.
@@ -70,10 +86,45 @@ déclaration. Types élémentaires :
 - **Signature** : Ed25519 sur ces octets signables, vérifiable avec
   `pubkey.bin` (vérification stricte : point canonique, pas de clé de petit
   ordre).
-- **Empreinte d'une entrée** (utilisée par le chaînage `prev`) : BLAKE3 de
-  l'encodage CBOR canonique de l'entrée **complète, signature incluse** —
-  c'est-à-dire BLAKE3 des octets du fichier `i.cbor`.
-- **Empreinte d'un snapshot ou d'un blob** : BLAKE3 des octets du fichier.
+- **Empreinte d'une entrée** (utilisée par le chaînage `prev` et pour la
+  racine) : BLAKE3 des **octets du fichier `i.cbor`** — c'est-à-dire BLAKE3 de
+  l'encodage CBOR canonique de l'entrée **complète, signature incluse**. Comme
+  ces octets sont canoniques (§ 3 bis), les deux formulations coïncident.
+- **Empreinte d'un snapshot ou d'un blob** : BLAKE3 des **octets du fichier**.
+
+## 3 bis. L'encodage canonique est vérifié (le fichier == ses octets hachés)
+
+Toutes les empreintes de ce format portent sur les **octets du fichier**, pas
+sur une re-sérialisation « équivalente ». CBOR autorise plusieurs encodages du
+même objet (entier en forme minimale ou longue, longueur de map/chaîne sur 0,
+1, 2… octets) ; un décodeur permissif — ciborium l'est — accepte les formes
+non minimales. Un fichier non canonique décode donc vers le bon objet tout en
+ayant `BLAKE3(octets) ≠ nom`.
+
+Le vérificateur **exige l'encodage canonique** pour chaque fichier lu — entrée
+`i.cbor`, `snapshots/<hex>.cbor`, `blobs/<hex>.cbor` — de la manière suivante,
+avant tout autre contrôle sur l'objet :
+
+1. décoder les octets du fichier en un objet ;
+2. **ré-encoder canoniquement** cet objet et exiger que le résultat soit
+   **identique, octet pour octet, aux octets du fichier**. Sinon : échec
+   (« octets CBOR non canoniques »), l'export est refusé.
+
+Une fois (2) acquis, les octets du fichier **sont** l'encodage canonique de
+l'objet, donc `BLAKE3(octets du fichier) == BLAKE3(encodage canonique) ==
+empreinte de l'objet décodé`. Le contrôle d'intégrité de l'étape 2 de
+l'algorithme (nom == empreinte) est alors, au bit près, `BLAKE3(octets du
+fichier) == nom` — exactement ce qu'un réimplémenteur calcule en hachant les
+octets bruts.
+
+**Pourquoi ce détour.** Un réimplémenteur dispose d'un « BLAKE3 des octets
+bruts » et va au plus court. `constat-verify`, lui, ne dépend que de
+`constat-model` (règle § 8) qui n'expose que « BLAKE3 de l'encodage canonique
+d'un objet » ; il obtient le **même verdict** par le contrôle (1)-(2)
+ci-dessus. Sur un export **conforme** (donc canonique), les deux méthodes
+acceptent exactement les mêmes fichiers et rejettent exactement les mêmes ; sur
+un fichier non canonique, les deux rejettent. C'est la garantie de l'§10.3 :
+« vérifiable sans Constat, verdict identique ».
 
 ## 4. Algorithme de vérification
 
@@ -83,10 +134,16 @@ désignant l'objet et la vérification en cause.
 1. **Clé** — lire `pubkey.bin` (exactement 32 octets), la décoder comme clé
    publique Ed25519. Échec sinon.
 2. **Intégrité des artefacts** — pour chaque fichier de `snapshots/` et de
-   `blobs/` : `BLAKE3(octets du fichier) == nom du fichier`. Échec
-   « snapshot altéré » / « blob altéré » sinon.
+   `blobs/` : `BLAKE3(octets du fichier) == nom du fichier`. `constat-verify`
+   l'établit via le contrôle canonique du § 3 bis (décoder, ré-encoder,
+   exiger octets identiques, puis empreinte == nom). Échec « octets CBOR non
+   canoniques » si le fichier n'est pas canonique, « snapshot altéré » /
+   « blob altéré » si l'empreinte ne vaut pas le nom.
 3. **Entrées** — lire `0.cbor`, `1.cbor`, … tant que le fichier suivant
-   existe. Au moins une entrée exigée.
+   existe. Chaque fichier d'entrée est soumis au même contrôle canonique
+   (§ 3 bis) : un fichier `i.cbor` non canonique est refusé, car son
+   `BLAKE3(octets du fichier)` — l'empreinte de chaînage — ne serait pas
+   celle qu'un vérificateur tiers calcule. Au moins une entrée exigée.
 4. **Chaînage** — l'entrée 0 doit avoir `prev = null`. Pour chaque entrée
    `i > 0` : `prev` doit être égal à `BLAKE3(octets de (i−1).cbor)`. Échec
    « chaîne rompue à l'entrée i » sinon.
@@ -278,6 +335,32 @@ indéterminable, donc **toute la suite de la chaîne invérifiable**. Côté
 vérificateur, un blob de rotation manquant est un échec « rotation
 invalide », que son empreinte figure ou non dans un manifeste de purge.
 
+**Portée exacte de ce contrôle, et ce qui le complète.** Le refus ci-dessus se
+déclenche quand le **snapshot** de rotation est **présent** : le vérificateur y
+lit la clé de collecteur `constat.rotation`, constate que le **blob** pointé
+manque, et refuse. Mais si c'est le **snapshot lui-même** qui est déclaré
+purgé (donc **absent** de l'export), le vérificateur ne peut pas savoir ce
+qu'il portait — un snapshot absent n'a plus ni `asset` ni `blobs` à
+inspecter — et il tolère l'absence comme n'importe quelle autre absence
+déclarée (§ 4 bis.3). Déterminer « ce snapshot absent portait-il une
+rotation ? » exigerait précisément le snapshot qui manque : c'est
+**indécidable sans lui**.
+
+Dans ce cas, l'invariant « une rotation n'est jamais purgeable » tient par un
+**effet de bord garanti**, pas par un contrôle dédié : une rotation qui a
+réellement eu lieu a fait signer **les entrées suivantes par la nouvelle
+clé**. Si son snapshot est faussement déclaré purgé, la rotation n'est pas
+suivie, la clé courante reste l'ancienne, et **la première entrée postérieure
+signée par la nouvelle clé échoue à la vérification de signature** (étape 5) —
+l'export est refusé. Une rotation cachée ne peut donc « passer » que si aucune
+entrée ne dépend d'elle (elle est la dernière du journal) : elle est alors sans
+effet observable, et l'omettre est bénin (la clé courante rapportée reste la
+clé de genèse, ce qu'un réimplémenteur conclut également). Aucun scénario ne
+permet à une rotation faussement purgée de valider une entrée forgée. Un
+producteur conforme, du reste, ne purge jamais une rotation
+(`plan_purge` la protège) : ce paragraphe ne concerne qu'un export
+**malveillant**, et il en décrit le rejet.
+
 ### 4 ter.5 Ce que la rotation ne permet pas
 
 - Elle ne « répare » pas une chaîne : chaînage, empreintes et signatures
@@ -314,8 +397,25 @@ artefact référencé, sans posséder la clé privée.
 Un vérificateur indépendant a besoin de : un décodeur CBOR, BLAKE3, Ed25519.
 Les étapes 1 à 7 ci-dessus (plus la section 4 bis si l'export contient des
 purges déclarées, et la section 4 ter s'il contient des rotations de clé)
-sont l'intégralité de l'algorithme. La seule subtilité est
-l'étape 5 : les octets signables sont le **ré-encodage canonique** de
-l'entrée avec `signature: []` — l'encodage est déterministe (maps ordonnées,
-entiers, pas de flottants), donc le ré-encodage de l'entrée décodée redonne
-les octets d'origine, au champ `signature` près.
+sont l'intégralité de l'algorithme.
+
+**Le plus court chemin** : hacher les **octets bruts** de chaque fichier
+(`BLAKE3(octets) == nom` pour `snapshots/` et `blobs/` ; empreinte de chaînage
+et racine = `BLAKE3(octets de i.cbor)`). C'est suffisant sur tout export
+conforme, car ceux-ci sont canoniques (§ 1, § 3 bis).
+
+Deux subtilités si l'on veut coller **au bit près** à `constat-verify` :
+
+- **Étape 2, canonicité (§ 3 bis).** `constat-verify` ne hache pas les octets
+  bruts directement (il ne dépend que de `constat-model`, qui n'expose que
+  « BLAKE3 de l'encodage canonique d'un objet ») : il **décode, ré-encode
+  canoniquement, exige des octets identiques**, puis compare l'empreinte au
+  nom. Le verdict est le même que « BLAKE3 des octets bruts == nom » sur tout
+  fichier canonique, et rejette tout fichier **non** canonique. Un
+  réimplémenteur qui hache les octets bruts obtient le même verdict ; s'il veut
+  la même stricte égalité, il vérifie aussi que les octets sont canoniques.
+- **Étape 5, octets signables.** Ils sont le **ré-encodage canonique** de
+  l'entrée avec `signature: []`. L'encodage est déterministe (maps ordonnées,
+  entiers minimaux, pas de flottants), donc le ré-encodage de l'entrée décodée
+  redonne les octets d'origine, au champ `signature` près — à condition, là
+  encore, que le fichier `i.cbor` soit canonique (garanti par l'étape 3).

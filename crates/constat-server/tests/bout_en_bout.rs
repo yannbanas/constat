@@ -156,11 +156,30 @@ fn start_server(pki: &TestPki) -> (SocketAddr, SharedStore) {
 }
 
 fn start_server_with_policy(pki: &TestPki, policy: AgentPolicy) -> (SocketAddr, SharedStore) {
+    start_server_full(pki, policy, None)
+}
+
+fn start_server_with_max(
+    pki: &TestPki,
+    policy: AgentPolicy,
+    max: usize,
+) -> (SocketAddr, SharedStore) {
+    start_server_full(pki, policy, Some(max))
+}
+
+fn start_server_full(
+    pki: &TestPki,
+    policy: AgentPolicy,
+    max: Option<usize>,
+) -> (SocketAddr, SharedStore) {
     let tls = serve::load_tls(&pki.server_cert, &pki.server_key, &pki.agents_ca).unwrap();
     let store: SharedStore = Arc::new(Mutex::new(MemoryStore::new()));
-    let server = serve::Server::bind("127.0.0.1:0", tls, Arc::clone(&store))
+    let mut server = serve::Server::bind("127.0.0.1:0", tls, Arc::clone(&store))
         .unwrap()
         .with_policy(policy);
+    if let Some(max) = max {
+        server = server.with_max_connections(max);
+    }
     let addr = server.local_addr().unwrap();
     std::thread::spawn(move || server.run());
     (addr, store)
@@ -491,6 +510,50 @@ fn rotation_puis_poussee_bout_en_bout() {
             guard.entries_of(&genesis).unwrap(),
             agent_store.entries().unwrap()
         );
+    }
+}
+
+/// Disponibilité sous flot : un serveur volontairement étroit (2 connexions
+/// simultanées) reçoit 6 poussées légitimes CONCURRENTES — plus que sa borne.
+/// Le bornage sérialise les créneaux mais l'acceptation ne panique pas et ne
+/// s'interbloque pas : les 6 poussées aboutissent, 6 journaux existent. Le
+/// serveur reste réactif sous un flot qui dépasse sa limite.
+#[test]
+fn flot_de_connexions_sous_la_borne_reste_servi() {
+    let pki = TestPki::generate("flot");
+    let (addr, server_store) = start_server_with_max(&pki, AgentPolicy::Tofu, 2);
+
+    let n: usize = 6;
+    let mut handles = Vec::new();
+    for i in 0..n {
+        let config = pki.push_config(addr);
+        handles.push(std::thread::spawn(move || {
+            let mut store = MemoryStore::new();
+            let signer = Signer::generate();
+            add_collecte(&mut store, &signer, "srv", i);
+            let batch =
+                build_batch(&store, signer.verifying_key().to_bytes(), "srv".into()).unwrap();
+            let result = push(&config, &batch);
+            (signer.verifying_key().to_bytes(), result)
+        }));
+    }
+
+    let mut journals = Vec::new();
+    for h in handles {
+        let (journal, result) = h.join().unwrap();
+        // Chaque poussée aboutit : ni panique d'acceptation, ni interblocage.
+        result.unwrap();
+        journals.push(journal);
+    }
+
+    let guard = server_store.lock().unwrap();
+    assert_eq!(
+        guard.journals().unwrap().len(),
+        n,
+        "les {n} poussées concurrentes doivent toutes avoir abouti"
+    );
+    for journal in journals {
+        assert_eq!(guard.entries_of(&journal).unwrap().len(), 1);
     }
 }
 

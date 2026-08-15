@@ -92,6 +92,25 @@ pub fn collect_all(collectors: &[Box<dyn Collector>]) -> Collection {
 
     for collector in collectors {
         let id = collector.id();
+        // Défense en profondeur (§7.1) : l'espace de noms réservé
+        // (`constat.purge`, `constat.rotation`, préfixe `constat.`) est
+        // exclusivement celui des chemins SIGNÉS de purge et de rotation
+        // ([`constat_store::purge`]/[`rotation`]). Une collecte ordinaire ne
+        // doit jamais y écrire — un collecteur (bug interne) qui porterait un
+        // identifiant réservé est refusé, jamais persisté, et déclaré comme
+        // tout autre échec (jamais masqué).
+        if constat_store::is_reserved_collector(&id) {
+            failed.push((
+                id,
+                format!(
+                    "identifiant dans l'espace de noms réservé « {} » : \
+                     ces blobs ne sont créés que par les chemins signés de \
+                     purge/rotation, jamais par une collecte ordinaire",
+                    constat_store::RESERVED_COLLECTOR_PREFIX
+                ),
+            ));
+            continue;
+        }
         match collector.collect() {
             Err(CollectError::Unavailable(reason)) => unavailable.push((id, reason)),
             Err(e) => failed.push((id, e.to_string())),
@@ -213,4 +232,46 @@ pub fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "hote-inconnu".to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use constat_collect::{CollectError, Collector, RawCapture, RedactedCapture};
+    use constat_model::Fact;
+
+    /// Collecteur de test dont l'identifiant usurpe l'espace de noms réservé :
+    /// il collecte et extrait normalement, mais son `id` est `constat.purge`.
+    struct ReservedCollector;
+
+    impl Collector for ReservedCollector {
+        fn id(&self) -> CollectorId {
+            CollectorId(constat_store::purge::PURGE_COLLECTOR.to_string())
+        }
+        fn collect(&self) -> Result<RawCapture, CollectError> {
+            Ok(RawCapture(b"peu importe".to_vec()))
+        }
+        fn redact(&self, raw: RawCapture) -> RedactedCapture {
+            RedactedCapture(raw.0)
+        }
+        fn extract(&self, _redacted: &RedactedCapture) -> Result<Vec<Fact>, CollectError> {
+            Ok(vec![Fact::new("service:x", "x.y", "z")])
+        }
+    }
+
+    /// Un collecteur portant un identifiant réservé (`constat.purge`) hors du
+    /// protocole de purge/rotation est refusé à la construction du blob :
+    /// aucun blob n'est produit, l'échec est déclaré (jamais masqué).
+    #[test]
+    fn collecteur_reserve_refuse_a_la_collecte() {
+        let collectors: Vec<Box<dyn Collector>> = vec![Box::new(ReservedCollector)];
+        let collection = collect_all(&collectors);
+        assert!(collection.is_empty(), "aucun blob ne doit être produit");
+        assert_eq!(collection.failed.len(), 1);
+        assert_eq!(
+            collection.failed[0].0 .0,
+            constat_store::purge::PURGE_COLLECTOR
+        );
+    }
 }

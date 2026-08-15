@@ -608,4 +608,15 @@ mod tests {
             Err(RotationError::Incoherent(_))
         ));
     }
+
+    /// Le collecteur de rotation appartient à l'espace de noms réservé
+    /// partagé : l'agent et le serveur s'appuient dessus pour le distinguer
+    /// d'une collecte ordinaire (défense en profondeur).
+    #[test]
+    fn rotation_collector_est_reserve() {
+        assert!(ROTATION_COLLECTOR.starts_with(crate::RESERVED_COLLECTOR_PREFIX));
+        assert!(crate::is_reserved_collector(&CollectorId(
+            ROTATION_COLLECTOR.to_string()
+        )));
+    }
 }

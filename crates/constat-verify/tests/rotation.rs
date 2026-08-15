@@ -11,8 +11,9 @@ use std::process::Command;
 use constat_model::{Blob, CollectorId, Fact, Snapshot, Timestamp};
 use constat_store::rotation::{build_rotation_blob, ROTATION_COLLECTOR};
 use constat_store::{
-    append_signed, export_store, purge_older_than, rotate_key, JournalEntry, MemoryStore,
-    RotationDeclaration, Signer, Store,
+    append_signed, build_purge_blob, export_store, manifest_hash, purge_older_than, rotate_key,
+    JournalEntry, MemoryStore, PurgeDeclaration, RotationDeclaration, Signer, Store,
+    PURGE_COLLECTOR,
 };
 use constat_verify::{verify_export, Export, VerifyError};
 
@@ -202,6 +203,84 @@ fn un_blob_de_rotation_absent_reste_refuse_meme_declare_purge() {
             assert!(detail.contains("jamais purgeable"), "{detail}")
         }
         autre => panic!("attendu RotationInvalide, obtenu : {autre:?}"),
+    }
+}
+
+/// F2 (défense en profondeur). Un snapshot ABSENT est toléré s'il est déclaré
+/// purgé (§16). Le vérificateur ne peut PAS savoir ce qu'un snapshot absent
+/// portait — donc si un snapshot de rotation est FAUSSEMENT déclaré purgé, il
+/// est bel et bien toléré absent. L'invariant « une rotation n'est jamais
+/// purgeable » tient alors par EFFET DE BORD : la rotation n'étant plus suivie,
+/// la clé courante reste l'ancienne, et la PREMIÈRE entrée signée par la
+/// nouvelle clé échoue à la signature. Ce test démontre ce rejet aval
+/// (FORMAT.md § 4 ter.4).
+#[test]
+fn un_snapshot_de_rotation_faussement_declare_purge_est_rejete_par_la_signature_aval() {
+    let old = Signer::generate();
+    let new = Signer::generate();
+
+    // Genèse : une rotation old -> new, portée par un snapshot « constat ».
+    let rot_decl = RotationDeclaration {
+        old_key: old.verifying_key().to_bytes(),
+        new_key: new.verifying_key().to_bytes(),
+        reason: None,
+    };
+    let rot_blob = build_rotation_blob(&rot_decl, Timestamp(1_000));
+    let rot_blob_hash = constat_model::blob_hash(&rot_blob).unwrap();
+    let rot_snap = Snapshot::new(
+        "constat",
+        Timestamp(1_000),
+        BTreeMap::from([(CollectorId(ROTATION_COLLECTOR.into()), rot_blob_hash)]),
+    );
+    let rot_snap_hash = constat_model::snapshot_hash(&rot_snap).unwrap();
+    let entry0 = old
+        .sign_entry(None, vec![rot_snap_hash], Timestamp(1_000))
+        .unwrap();
+    let entry0_hash = constat_model::hash_canonical(&entry0).unwrap();
+
+    // Entrée suivante signée par la NOUVELLE clé (post-rotation).
+    let entry1 = new
+        .sign_entry(Some(entry0_hash), vec![], Timestamp(2_000))
+        .unwrap();
+    let entry1_hash = constat_model::hash_canonical(&entry1).unwrap();
+
+    // Purge (signée par la clé courante, new) qui déclare FAUSSEMENT le
+    // snapshot de rotation purgé — postérieure à sa référence (entrée 2 > 0).
+    let purged = vec![rot_snap_hash];
+    let purge_decl = PurgeDeclaration {
+        from: Timestamp(1_000),
+        to: Timestamp(1_000),
+        reason: "purge d'une rotation (interdite)".into(),
+        objects: 1,
+        manifest: manifest_hash(&purged).unwrap(),
+        purged,
+    };
+    let purge_blob = build_purge_blob(&purge_decl, Timestamp(3_000));
+    let purge_blob_hash = constat_model::blob_hash(&purge_blob).unwrap();
+    let purge_snap = Snapshot::new(
+        "constat",
+        Timestamp(3_000),
+        BTreeMap::from([(CollectorId(PURGE_COLLECTOR.into()), purge_blob_hash)]),
+    );
+    let purge_snap_hash = constat_model::snapshot_hash(&purge_snap).unwrap();
+    let entry2 = new
+        .sign_entry(Some(entry1_hash), vec![purge_snap_hash], Timestamp(3_000))
+        .unwrap();
+
+    // Le snapshot de rotation ET son blob sont ABSENTS (faussement purgés) ;
+    // seuls la déclaration de purge et son snapshot sont fournis.
+    let export = Export {
+        entries: vec![entry0, entry1, entry2],
+        snapshots: BTreeMap::from([(purge_snap_hash, purge_snap)]),
+        blobs: BTreeMap::from([(purge_blob_hash, purge_blob)]),
+        public_key: old.verifying_key().to_bytes(),
+    };
+
+    // La rotation cachée n'est pas suivie : entry1, signée par la nouvelle
+    // clé, ne vérifie pas contre l'ancienne — l'export est refusé.
+    match verify_export(&export).unwrap_err() {
+        VerifyError::SignatureInvalide { index } => assert_eq!(index, 1),
+        autre => panic!("attendu SignatureInvalide (rejet aval), obtenu : {autre:?}"),
     }
 }
 

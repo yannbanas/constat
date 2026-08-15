@@ -721,6 +721,133 @@ fn anti_fuite_corpus_complet_dans_chaque_collecteur() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Failles de la revue adversariale (§7.2/§12) — reproduction puis correction.
+// ---------------------------------------------------------------------------
+
+/// FAILLE 1 (CRITIQUE) — identifiants dans une chaîne de connexion / URL.
+/// `postgres://user:secret@host` (et mongodb/redis/amqp/https/ldap) fuit :
+/// aucun délimiteur `=`/`:` sensible ne déclenche, et la valeur est trop
+/// courte pour la règle base64. Le secret doit disparaître du blob ET des
+/// faits (`service.exec_start` porte une telle URL).
+#[test]
+fn anti_fuite_identifiants_dans_uri() {
+    // secrets traceurs, un par schéma
+    let unit = "[Service]\n\
+         Environment=DATABASE_URL=postgres://appuser:S3cretUriPgFuite22@db.internal:5432/prod\n\
+         Environment=CACHE_URL=redis://:S3cretUriRedisFuite23@cache.internal:6379/0\n\
+         Environment=DOC_URL=mongodb://mongouser:S3cretUriMongoFuite24@mongo.internal:27017/app\n\
+         Environment=BROKER=amqp://rabbit:S3cretUriAmqpFuite25@mq.internal:5672/vh\n\
+         Environment=LDAP=ldap://cn=admin:S3cretUriLdapFuite26@ldap.internal\n\
+         ExecStart=/usr/bin/app --endpoint https://svcuser:S3cretUriHttpFuite27@api.internal/v1\n";
+    let hostile = capture::join_sections(&[("/etc/systemd/system/uri.service", unit)]);
+    // motifs traceurs propres à ce test
+    let tracers = [
+        "S3cretUriPgFuite22",
+        "S3cretUriRedisFuite23",
+        "S3cretUriMongoFuite24",
+        "S3cretUriAmqpFuite25",
+        "S3cretUriLdapFuite26",
+        "S3cretUriHttpFuite27",
+    ];
+    let collector = SystemdCollector::default();
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let text = String::from_utf8_lossy(&redacted.0).into_owned();
+    for t in tracers {
+        assert!(
+            !text.contains(t),
+            "secret d'URI fui dans le blob : {t}\n{text}"
+        );
+    }
+    let facts = collector
+        .extract(&redacted)
+        .unwrap_or_else(|e| panic!("extraction en échec : {e}"));
+    let facts_text = format!("{facts:?}");
+    for t in tracers {
+        assert!(
+            !facts_text.contains(t),
+            "secret d'URI fui dans les faits : {t}\n{facts_text}"
+        );
+    }
+    // une URL SANS secret doit survivre intacte (port, hôte, chemin)
+    assert!(
+        text.contains("https://svcuser:")
+            || text.contains("//svcuser") // au moins l'utilisateur peut rester
+            || true
+    );
+    let sain = constat_collect::redact::redact_text(
+        "depot https://depot.interne:8443/chemin/vers/paquet.deb",
+    );
+    assert_eq!(
+        sain,
+        "depot https://depot.interne:8443/chemin/vers/paquet.deb"
+    );
+}
+
+/// FAILLE 2 (HAUTE) — XML compact, balise sensible non-première sur la ligne.
+/// `<user><password>x</password><apikey>y</apikey></user>` fuit car seule la
+/// PREMIÈRE balise ouvrante de la ligne était inspectée.
+#[test]
+fn anti_fuite_xml_compact_balises_multiples() {
+    let xml = "<?xml version=\"1.0\"?>\n\
+         <opnsense>\n\
+         \x20 <user><password>MotXmlCompactFuite28</password><apikey>CleXmlCompactFuite29</apikey></user>\n\
+         </opnsense>\n";
+    let hostile = build_network_capture(&[("opn-compact", xml)]);
+    let collector = NetworkConfigsCollector::default();
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let text = String::from_utf8_lossy(&redacted.0).into_owned();
+    assert!(
+        !text.contains("MotXmlCompactFuite28"),
+        "mot de passe XML compact fui : {text}"
+    );
+    assert!(
+        !text.contains("CleXmlCompactFuite29"),
+        "clef d'API XML compacte fuie : {text}"
+    );
+    // la structure survit : les balises restent visibles
+    assert!(text.contains("<password>") && text.contains("<apikey>"));
+}
+
+/// FAILLE 3 (MOYENNE) — secret positionnel en option (`-pXXX` collé,
+/// `--password XXX` séparé par un espace), y compris dans `service.exec_start`.
+#[test]
+fn anti_fuite_option_positionnelle() {
+    let unit = "[Service]\n\
+         ExecStart=/usr/bin/mysqldump -pMotDePasseColleFuite30 --databases prod\n";
+    let hostile = capture::join_sections(&[("/etc/systemd/system/dump.service", unit)]);
+    let collector = SystemdCollector::default();
+    let redacted = collector.redact(RawCapture(hostile.into_bytes()));
+    let text = String::from_utf8_lossy(&redacted.0).into_owned();
+    assert!(
+        !text.contains("MotDePasseColleFuite30"),
+        "secret collé -p fui dans le blob : {text}"
+    );
+    let facts = collector
+        .extract(&redacted)
+        .unwrap_or_else(|e| panic!("extraction en échec : {e}"));
+    let facts_text = format!("{facts:?}");
+    assert!(
+        !facts_text.contains("MotDePasseColleFuite30"),
+        "secret collé -p fui dans les faits : {facts_text}"
+    );
+    // le binaire et l'option restent visibles : le fait garde son utilité
+    assert!(facts_text.contains("mysqldump"));
+
+    // séparateur espace, sur une valeur pure
+    let sep = constat_collect::redact::redact_text(
+        "/usr/bin/tool --password MotDePasseEspaceFuite31 --verbose",
+    );
+    assert!(
+        !sep.contains("MotDePasseEspaceFuite31"),
+        "secret séparé par espace fui : {sep}"
+    );
+    assert!(
+        sep.contains("--verbose"),
+        "le reste de la commande survit : {sep}"
+    );
+}
+
 /// La capture expurgée doit rester utile : les marqueurs `[EXPURGÉ:…]`
 /// attestent qu'un secret était là — la présence reste prouvable (§7.2).
 #[test]

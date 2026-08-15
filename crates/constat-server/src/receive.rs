@@ -80,10 +80,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use constat_model::{blob_hash, snapshot_hash, Blob, BlobHash, CollectorId, Snapshot};
+use constat_store::purge::{parse_purge_blob, PURGE_COLLECTOR};
 use constat_store::rotation::{parse_rotation_blob, ROTATION_COLLECTOR};
 use constat_store::{
-    current_key, entry_hash, signable_bytes, JournalEntry, JournalId, MultiJournalStore, Signature,
-    StoreError, VerifyingKey,
+    current_key, entry_hash, is_reserved_collector, signable_bytes, JournalEntry, JournalId,
+    MultiJournalStore, Signature, StoreError, VerifyingKey, RESERVED_COLLECTOR_PREFIX,
 };
 use serde::{Deserialize, Serialize};
 
@@ -151,6 +152,12 @@ pub enum ReceiveError {
     /// dupliqués) : son empreinte serait ambiguë, il est refusé.
     #[error("blob non canonique : {0}")]
     NotCanonical(String),
+    /// Un blob du lot porte un collecteur de l'espace de noms réservé
+    /// (`constat.`) sans être une déclaration de purge ou de rotation valide :
+    /// une collecte ordinaire n'a pas le droit d'introduire un blob réservé
+    /// (défense en profondeur). Le lot est refusé avant toute écriture.
+    #[error("espace de noms réservé usurpé : {0}")]
+    ReservedNamespace(String),
     /// Erreur du magasin serveur.
     #[error("erreur du magasin : {0}")]
     Store(#[from] constat_store::StoreError),
@@ -327,6 +334,15 @@ impl Receiver for StoreReceiver<'_> {
                     "collecteur {} : faits non triés ou dupliqués",
                     blob.collector.0
                 )));
+            }
+            // Défense en profondeur : un blob de l'espace de noms réservé
+            // (`constat.`) ne peut entrer que s'il est une déclaration de
+            // purge ou de rotation VALIDE — les vraies entrées signées de
+            // purge/rotation d'un agent légitime passent (leur blob suit le
+            // format réservé attendu), une collecte ordinaire qui usurpe un
+            // collecteur réservé est refusée avant toute écriture.
+            if is_reserved_collector(&blob.collector) {
+                check_reserved_blob(blob)?;
             }
             let hash = blob_hash(blob).map_err(StoreError::from)?;
             batch_blobs.insert(hash);
@@ -530,6 +546,37 @@ impl Receiver for StoreReceiver<'_> {
             last_entry: root,
             journal_root: root,
         })
+    }
+}
+
+/// Vérifie qu'un blob de l'espace de noms réservé ([`RESERVED_COLLECTOR_PREFIX`])
+/// est une déclaration légitime — la seule origine autorisée pour ces blobs.
+///
+/// - `constat.purge` : doit se relire comme une déclaration de purge cohérente
+///   ([`parse_purge_blob`]) ;
+/// - `constat.rotation` : doit se relire comme une déclaration de rotation
+///   cohérente ([`parse_rotation_blob`]) — la validité *protocolaire*
+///   (`old_key` = clé courante) reste vérifiée plus loin, au traitement de la
+///   rotation ;
+/// - tout autre collecteur du préfixe réservé : refusé, aucune sémantique ne
+///   lui est associée.
+fn check_reserved_blob(blob: &Blob) -> Result<(), ReceiveError> {
+    match blob.collector.0.as_str() {
+        PURGE_COLLECTOR => parse_purge_blob(blob).map(|_| ()).map_err(|e| {
+            ReceiveError::ReservedNamespace(format!(
+                "blob « {PURGE_COLLECTOR} » : déclaration de purge invalide : {e}"
+            ))
+        }),
+        ROTATION_COLLECTOR => parse_rotation_blob(blob).map(|_| ()).map_err(|e| {
+            ReceiveError::ReservedNamespace(format!(
+                "blob « {ROTATION_COLLECTOR} » : déclaration de rotation invalide : {e}"
+            ))
+        }),
+        other => Err(ReceiveError::ReservedNamespace(format!(
+            "collecteur « {other} » dans l'espace de noms réservé « {RESERVED_COLLECTOR_PREFIX} » : \
+             seules les déclarations de purge et de rotation y sont admises, jamais une collecte \
+             ordinaire"
+        ))),
     }
 }
 
@@ -1030,5 +1077,75 @@ mod tests {
         let mut store = MemoryStore::new();
         let err = StoreReceiver::new(&mut store).receive(batch).unwrap_err();
         assert!(matches!(err, ReceiveError::NotCanonical(_)), "{err}");
+    }
+
+    /// Défense en profondeur : une collecte ordinaire qui usurpe le collecteur
+    /// réservé `constat.purge` (sans en être une déclaration valide) est
+    /// refusée AVANT toute écriture — le blob n'entre pas dans le magasin.
+    #[test]
+    fn collecte_usurpant_constat_purge_refusee() {
+        let (_, mut batch) = agent_batch(1);
+        batch.blobs[0].collector = CollectorId(PURGE_COLLECTOR.to_string());
+        let mut store = MemoryStore::new();
+        let err = StoreReceiver::new(&mut store).receive(batch).unwrap_err();
+        assert!(matches!(err, ReceiveError::ReservedNamespace(_)), "{err}");
+        assert_eq!(store.blob_count(), 0);
+        assert!(store.journals().unwrap().is_empty());
+    }
+
+    /// Un collecteur inconnu de l'espace réservé (`constat.` + n'importe quoi)
+    /// n'a aucune sémantique : refusé, aucune écriture.
+    #[test]
+    fn collecteur_reserve_inconnu_refuse() {
+        let (_, mut batch) = agent_batch(1);
+        batch.blobs[0].collector = CollectorId("constat.inconnu".to_string());
+        let mut store = MemoryStore::new();
+        let err = StoreReceiver::new(&mut store).receive(batch).unwrap_err();
+        assert!(matches!(err, ReceiveError::ReservedNamespace(_)), "{err}");
+        assert_eq!(store.blob_count(), 0);
+    }
+
+    /// Les VRAIES déclarations de purge/rotation transitent par le push (un
+    /// agent qui purge/tourne sa clé localement repousse tout son magasin) :
+    /// un blob `constat.purge` **valide** doit passer — la garde de l'espace
+    /// réservé ne bloque que les usurpations, pas le protocole légitime.
+    #[test]
+    fn declaration_de_purge_legitime_acceptee() {
+        use constat_store::purge::{
+            build_purge_blob, manifest_hash, PurgeDeclaration, PURGE_ASSET,
+        };
+
+        let signer = Signer::generate();
+        let genesis = signer.verifying_key().to_bytes();
+
+        // Une purge cohérente (liste vide : objects = 0, manifeste de []).
+        let purged: Vec<BlobHash> = Vec::new();
+        let declaration = PurgeDeclaration {
+            from: Timestamp(1_000),
+            to: Timestamp(1_000),
+            reason: "rétention".into(),
+            objects: 0,
+            manifest: manifest_hash(&purged).unwrap(),
+            purged,
+        };
+        let blob = build_purge_blob(&declaration, Timestamp(1_000));
+
+        let mut agent = MemoryStore::new();
+        let blob_hash = agent.put_blob(&blob).unwrap();
+        let snapshot = Snapshot::new(
+            PURGE_ASSET,
+            Timestamp(1_000),
+            BTreeMap::from([(CollectorId(PURGE_COLLECTOR.to_string()), blob_hash)]),
+        );
+        let snapshot_hash = agent.put_snapshot(&snapshot).unwrap();
+        append_signed(&mut agent, &signer, vec![snapshot_hash], Timestamp(1_000)).unwrap();
+
+        let mut server = MemoryStore::new();
+        let receipt = StoreReceiver::new(&mut server)
+            .receive(batch_from_store(&agent, genesis, PURGE_ASSET))
+            .unwrap();
+        assert_eq!(receipt.accepted_entries, 1);
+        assert_eq!(server.entries_of(&genesis).unwrap().len(), 1);
+        assert!(server.has_blob(&blob_hash).unwrap());
     }
 }
