@@ -212,8 +212,17 @@ name = "calque-engine"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
+ "calque-model 0.6.0",
  "calque-space",
+ "ipnet",
+ "serde",
+]
+
+[[package]]
+name = "calque-model"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
+dependencies = [
  "ipnet",
  "serde",
 ]
@@ -229,10 +238,10 @@ dependencies = [
 
 [[package]]
 name = "calque-parse"
-version = "0.6.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
 dependencies = [
- "calque-model",
+ "calque-model 0.4.0",
  "quick-xml",
  "serde",
  "thiserror",
@@ -244,7 +253,7 @@ version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
  "calque-engine",
- "calque-model",
+ "calque-model 0.6.0",
  "ipnet",
  "serde",
  "serde_yaml",
@@ -256,17 +265,17 @@ name = "calque-space"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
+ "calque-model 0.6.0",
  "ipnet",
  "serde",
 ]
 
 [[package]]
 name = "calque-vendors"
-version = "0.6.0"
-source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
 dependencies = [
- "calque-model",
+ "calque-model 0.4.0",
  "calque-parse",
  "ipnet",
  "serde",
@@ -431,7 +440,7 @@ version = "0.5.0"
 dependencies = [
  "blake3",
  "calque-engine",
- "calque-model",
+ "calque-model 0.6.0",
  "calque-policy",
  "calque-vendors",
  "ciborium",
