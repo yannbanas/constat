@@ -209,11 +209,31 @@ dependencies = [
 
 [[package]]
 name = "calque-engine"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
+dependencies = [
+ "calque-model 0.4.0",
+ "calque-space 0.4.0",
+ "ipnet",
+ "serde",
+]
+
+[[package]]
+name = "calque-engine"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
- "calque-space",
+ "calque-model 0.6.0",
+ "calque-space 0.6.0",
+ "ipnet",
+ "serde",
+]
+
+[[package]]
+name = "calque-model"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
+dependencies = [
  "ipnet",
  "serde",
 ]
@@ -232,7 +252,7 @@ name = "calque-parse"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
+ "calque-model 0.6.0",
  "quick-xml",
  "serde",
  "thiserror",
@@ -243,8 +263,8 @@ name = "calque-policy"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-engine",
- "calque-model",
+ "calque-engine 0.6.0",
+ "calque-model 0.6.0",
  "ipnet",
  "serde",
  "serde_yaml",
@@ -253,10 +273,20 @@ dependencies = [
 
 [[package]]
 name = "calque-space"
+version = "0.4.0"
+source = "git+https://github.com/yannbanas/calque?tag=v0.4.0#fe45662c7a5b2bfc2ba6bc7ecd6e3226ea6d1ee3"
+dependencies = [
+ "calque-model 0.4.0",
+ "ipnet",
+ "serde",
+]
+
+[[package]]
+name = "calque-space"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
+ "calque-model 0.6.0",
  "ipnet",
  "serde",
 ]
@@ -266,7 +296,7 @@ name = "calque-vendors"
 version = "0.6.0"
 source = "git+https://github.com/yannbanas/calque?tag=v0.6.0#e675cdec91ac39377117ec545fe8ae01bf49a566"
 dependencies = [
- "calque-model",
+ "calque-model 0.6.0",
  "calque-parse",
  "ipnet",
  "serde",
@@ -430,8 +460,8 @@ name = "constat-cli"
 version = "0.5.0"
 dependencies = [
  "blake3",
- "calque-engine",
- "calque-model",
+ "calque-engine 0.4.0",
+ "calque-model 0.6.0",
  "calque-policy",
  "calque-vendors",
  "ciborium",
